@@ -302,12 +302,11 @@ st.markdown(
 # ============================================================
 
 def _section_header(
-    number: str,
     title: str,
     description: str,
     state: str | None = None,
 ) -> None:
-    """Renders a section header. The `number` parameter is retained to prevent breaking existing positional arguments, but is omitted from the UI."""
+    """Renders a section header without numbering."""
     state_html = (
         f'<div class="section-state">{state}</div>'
         if state
@@ -326,7 +325,6 @@ def _section_header(
         """,
         unsafe_allow_html=True,
     )
-
 # ============================================================
 # SESSION STATE
 # ============================================================
@@ -393,35 +391,6 @@ if not st.session_state.get("screener_session_id"):
 # ============================================================
 # HELPERS
 # ============================================================
-
-def _section_header(
-    number: str,
-    title: str,
-    description: str,
-    state: str | None = None,
-) -> None:
-    state_html = (
-        f'<div class="section-state">{state}</div>'
-        if state
-        else ""
-    )
-
-    st.markdown(
-        f"""
-        <div class="section-heading">
-            <div class="section-heading-main">
-                <div class="section-number">{number}</div>
-                <div>
-                    <div class="section-title">{title}</div>
-                    <div class="section-description">{description}</div>
-                </div>
-            </div>
-            {state_html}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
 
 def _metric_grid(metrics: list[tuple[str, str]]) -> None:
     """Render compact metric cards without markdown indentation issues."""
