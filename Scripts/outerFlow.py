@@ -1,25 +1,32 @@
 """
 Screener outer flow.
 
-Flow
-----
+Responsibilities
+----------------
 1. Authenticate with Screener.
-2. Open /explore/.
-3. Discover every screen under "Your screens".
-4. Extract:
-      - title
-      - description
-      - href
-5. Dashboard selects screens from this discovered metadata.
-6. Scrape only the selected screens.
+2. Discover the user's custom screens from /explore/.
+3. Extract title, description and href.
+4. Automatically group screens using the shared leading
+   title identity.
+5. Detect PACK groups when all screens in a group have the
+   same description.
+6. Let the dashboard run:
+      - SINGLE -> exactly one screen
+      - MERGE  -> multiple screens
+      - PACK   -> automatic merge of the complete pack
+7. Save one output CSV for the selected operation.
 
-No hard-coded Screener screen names.
+No Screener screen names are hard-coded.
 """
 
 from __future__ import annotations
 
+import csv
+import hashlib
 import json
+import re
 import time
+from collections import Counter, defaultdict
 from getpass import getpass
 from pathlib import Path
 from urllib.parse import urljoin
@@ -27,7 +34,7 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
-from innerFlow import scrape_screen, save_group_csv
+from innerFlow import scrape_screen
 
 
 # ============================================================
@@ -35,10 +42,22 @@ from innerFlow import scrape_screen, save_group_csv
 # ============================================================
 
 BASE_URL = "https://www.screener.in"
+
 LOGIN_URL = f"{BASE_URL}/login/"
+
 EXPLORE_URL = f"{BASE_URL}/explore/"
 
-SESSION_FILE = Path("screener_session.json")
+SESSION_FILE = Path(
+    "screener_session.json"
+)
+
+BASE_DATA_DIR = Path(
+    "screener_data"
+)
+
+GROUPS_DIR = (
+    BASE_DATA_DIR / "groups"
+)
 
 
 # ============================================================
@@ -46,7 +65,9 @@ SESSION_FILE = Path("screener_session.json")
 # ============================================================
 
 def create_screener_session():
-    """Create one HTTP session for the complete Screener run."""
+    """
+    Create one HTTP session for the complete Screener run.
+    """
 
     session = requests.Session()
 
@@ -63,7 +84,9 @@ def create_screener_session():
                 "application/xml;q=0.9,image/avif,image/webp,"
                 "*/*;q=0.8"
             ),
-            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Language": (
+                "en-US,en;q=0.9"
+            ),
         }
     )
 
@@ -75,10 +98,17 @@ def create_screener_session():
 # ============================================================
 
 def save_session(session):
-    """Save Screener cookies. The password is never stored."""
+    """
+    Save Screener cookies.
 
-    cookies = requests.utils.dict_from_cookiejar(
-        session.cookies
+    Password is never stored.
+    """
+
+    cookies = (
+        requests.utils
+        .dict_from_cookiejar(
+            session.cookies
+        )
     )
 
     with open(
@@ -86,46 +116,54 @@ def save_session(session):
         "w",
         encoding="utf-8",
     ) as file:
+
         json.dump(
             cookies,
             file,
             indent=2,
         )
 
-    print(
-        f"Screener session saved to: "
-        f"{SESSION_FILE.resolve()}"
-    )
-
 
 def load_saved_session(session):
-    """Load the saved Screener cookies when available."""
+    """
+    Load saved Screener cookies.
+
+    Returns:
+        True  -> loaded
+        False -> unavailable/invalid file
+    """
 
     if not SESSION_FILE.exists():
-        print("No saved Screener session found.")
+
         return False
 
     try:
+
         with open(
             SESSION_FILE,
             "r",
             encoding="utf-8",
         ) as file:
-            cookies = json.load(file)
+
+            cookies = json.load(
+                file
+            )
 
         session.cookies = (
-            requests.utils.cookiejar_from_dict(
+            requests.utils
+            .cookiejar_from_dict(
                 cookies
             )
         )
 
-        print("Saved Screener session loaded.")
         return True
 
     except Exception as exc:
+
         print(
             f"Could not load saved session: {exc}"
         )
+
         return False
 
 
@@ -135,11 +173,11 @@ def load_saved_session(session):
 
 def is_authenticated(session):
     """
-    Check whether the current session exposes
-    the authenticated 'Your screens' section.
+    Check the authenticated Explore page.
     """
 
     try:
+
         response = session.get(
             EXPLORE_URL,
             timeout=30,
@@ -152,28 +190,45 @@ def is_authenticated(session):
             "html.parser",
         )
 
-        for heading in soup.select("h2.h3"):
+        for heading in soup.select(
+            "h2.h3"
+        ):
 
-            heading_text = heading.get_text(
+            text = heading.get_text(
                 " ",
                 strip=True,
             )
 
-            if heading_text.lower() == "your screens":
+            if (
+                text.casefold()
+                == "your screens"
+            ):
+
                 return True
 
         return False
 
     except requests.RequestException:
+
         return False
 
 
 def perform_login(session):
-    """Perform a fresh Screener login."""
+    """
+    Perform fresh Screener login.
+    """
 
-    print("\n========================================")
-    print("FRESH SCREENER LOGIN")
-    print("========================================")
+    print(
+        "\n========================================"
+    )
+
+    print(
+        "FRESH SCREENER LOGIN"
+    )
+
+    print(
+        "========================================"
+    )
 
     login_response = session.get(
         LOGIN_URL,
@@ -187,19 +242,25 @@ def perform_login(session):
         "html.parser",
     )
 
-    csrf_input = login_soup.select_one(
-        'input[name="csrfmiddlewaretoken"]'
+    csrf_input = (
+        login_soup.select_one(
+            'input[name="csrfmiddlewaretoken"]'
+        )
     )
 
     if csrf_input is None:
+
         raise RuntimeError(
             "Could not find csrfmiddlewaretoken "
             "on Screener login page."
         )
 
-    csrf_token = csrf_input.get("value")
+    csrf_token = csrf_input.get(
+        "value"
+    )
 
     if not csrf_token:
+
         raise RuntimeError(
             "Screener returned an empty CSRF token."
         )
@@ -213,6 +274,7 @@ def perform_login(session):
     )
 
     if not email or not password:
+
         raise RuntimeError(
             "Email and password are required."
         )
@@ -243,24 +305,33 @@ def perform_login(session):
     login_response.raise_for_status()
 
     if not is_authenticated(session):
+
         raise RuntimeError(
-            "Login completed, but Screener did not return "
-            "the authenticated 'Your screens' section."
+            "Login completed, but Screener did not "
+            "return the authenticated 'Your screens' section."
         )
 
-    print("Authentication successful.")
+    save_session(
+        session
+    )
+
+    print(
+        "Authentication successful."
+    )
 
 
 def authenticate_screener(session):
-    """Reuse saved session or perform a fresh login."""
+    """
+    Reuse saved session when possible.
+    """
 
-    if load_saved_session(session):
+    if load_saved_session(
+        session
+    ):
 
-        print(
-            "Checking saved Screener session..."
-        )
-
-        if is_authenticated(session):
+        if is_authenticated(
+            session
+        ):
 
             print(
                 "Saved Screener session is valid."
@@ -268,20 +339,12 @@ def authenticate_screener(session):
 
             return
 
-        print(
-            "Saved session is expired or invalid."
-        )
-
         session.cookies.clear()
 
-    perform_login(session)
+    perform_login(
+        session
+    )
 
-    save_session(session)
-
-
-# ============================================================
-# SCREEN DISCOVERY
-# ============================================================
 
 # ============================================================
 # SCREEN DISCOVERY
@@ -289,19 +352,15 @@ def authenticate_screener(session):
 
 def get_custom_screens(session):
     """
-    Discover all custom screens under Screener's
-    authenticated 'Your screens' section.
+    Discover all screens under 'Your screens'.
 
-    Returns:
-        [
-            {
-                "title": "...",
-                "description": "...",
-                "href": "..."
-            }
-        ]
+    Every screen is represented as:
 
-    The href is the unique identifier.
+        {
+            "title": "...",
+            "description": "...",
+            "href": "..."
+        }
     """
 
     response = session.get(
@@ -317,33 +376,39 @@ def get_custom_screens(session):
     )
 
     # --------------------------------------------------------
-    # Find "Your screens"
+    # Locate "Your screens"
     # --------------------------------------------------------
 
     heading = None
 
-    for element in soup.select("h2.h3"):
+    for element in soup.select(
+        "h2.h3"
+    ):
 
         text = element.get_text(
             " ",
             strip=True,
         )
 
-        if text.lower() == "your screens":
+        if text.casefold() == "your screens":
+
             heading = element
             break
 
     if heading is None:
+
         raise RuntimeError(
-            "Could not find the 'Your screens' section "
+            "Could not find 'Your screens' "
             "on Screener Explore."
         )
 
     your_screens_card = heading.parent
 
     if your_screens_card is None:
+
         raise RuntimeError(
-            "Could not identify the 'Your screens' card."
+            "Could not identify the "
+            "'Your screens' card."
         )
 
     # --------------------------------------------------------
@@ -352,18 +417,14 @@ def get_custom_screens(session):
 
     screens = []
 
-    screen_items = your_screens_card.select(
+    for item in your_screens_card.select(
         "a.screen-item"
-    )
+    ):
 
-    for item in screen_items:
-
-        # ----------------------------------------------------
-        # TITLE
-        # ----------------------------------------------------
-
-        title_element = item.select_one(
-            "div.font-weight-500"
+        title_element = (
+            item.select_one(
+                "div.font-weight-500"
+            )
         )
 
         if title_element is None:
@@ -374,40 +435,29 @@ def get_custom_screens(session):
             strip=True,
         )
 
-        # ----------------------------------------------------
-        # DESCRIPTION
-        # ----------------------------------------------------
-        #
-        # Actual Screener HTML:
-        #
-        # <p class="sub font-size-12 margin-0 show-from-desktop">
-        #     Deeply Undervalued
-        # </p>
-        #
-
-        description_element = item.select_one(
-            "p.sub"
+        description_element = (
+            item.select_one(
+                "p.sub"
+            )
         )
 
         if description_element is None:
 
-            # Fallback in case Screener changes
-            # the class structure slightly.
-            description_element = item.find(
-                "p"
+            description_element = (
+                item.find("p")
             )
 
         description = ""
 
         if description_element is not None:
-            description = description_element.get_text(
-                " ",
-                strip=True,
-            )
 
-        # ----------------------------------------------------
-        # HREF
-        # ----------------------------------------------------
+            description = (
+                description_element
+                .get_text(
+                    " ",
+                    strip=True,
+                )
+            )
 
         href = item.get(
             "href"
@@ -425,45 +475,27 @@ def get_custom_screens(session):
         )
 
     if not screens:
+
         raise RuntimeError(
-            "Found 'Your screens' but no screen links."
+            "Found 'Your screens' but no "
+            "screen links were discovered."
         )
 
     print(
-        f"\nFound {len(screens)} custom Screener screens."
+        f"Discovered {len(screens)} custom screens."
     )
 
-    # --------------------------------------------------------
-    # Debug output
-    # --------------------------------------------------------
-
-    for screen in screens:
-
-        print(
-            f"\nTitle: {screen['title']}"
-        )
-
-        print(
-            f"Description: {screen['description']}"
-        )
-
-        print(
-            f"URL: {screen['href']}"
-        )
-
     return screens
-# ============================================================
-# DISCOVER SCREENS FOR DASHBOARD
-# ============================================================
+
 
 def discover_custom_screens():
     """
     Authenticate and return discovered screens.
-
-    Used by dashboard.py to populate the UI.
     """
 
-    session = create_screener_session()
+    session = (
+        create_screener_session()
+    )
 
     try:
 
@@ -471,80 +503,289 @@ def discover_custom_screens():
             session
         )
 
-        screens = get_custom_screens(
+        return get_custom_screens(
             session
         )
-
-        return screens
 
     finally:
 
         session.close()
 
-        print(
-            "Discovery session closed."
+
+# ============================================================
+# NORMALIZATION
+# ============================================================
+
+def normalize_text(
+    value,
+):
+    """
+    Normalize text for comparisons.
+    """
+
+    if value is None:
+
+        return ""
+
+    value = str(
+        value
+    ).strip().casefold()
+
+    value = re.sub(
+        r"\s+",
+        " ",
+        value,
+    )
+
+    return value
+
+
+def title_tokens(
+    title,
+):
+    """
+    Convert title to normalized tokens.
+    """
+
+    return re.findall(
+        r"[a-z0-9]+",
+        normalize_text(
+            title
+        ),
+    )
+
+
+# ============================================================
+# GROUP DETECTION
+# ============================================================
+
+def get_leading_title_identity(
+    title,
+):
+    """
+    Return the first meaningful title token.
+
+    Examples:
+
+        QUALITY CAPITAL AND INFRASTRUCTURE INTENSIVE
+            -> quality
+
+        QUALITY FINANCE
+            -> quality
+
+        QUALITY NON FINANCE
+            -> quality
+
+        VALUATION NON FINANCE
+            -> valuation
+
+        VALUATION FINANCE
+            -> valuation
+
+    This prevents words such as:
+        and
+        infrastructure
+        intensive
+    from becoming accidental group names.
+    """
+
+    tokens = title_tokens(
+        title
+    )
+
+    stopwords = {
+        "and",
+        "or",
+        "the",
+        "of",
+        "for",
+        "in",
+        "on",
+        "to",
+        "with",
+        "a",
+        "an",
+    }
+
+    for token in tokens:
+
+        if token not in stopwords:
+
+            return token
+
+    return normalize_text(
+        title
+    )
+
+
+def build_screen_groups(
+    screens,
+):
+    """
+    Automatically build screen groups.
+
+    Grouping:
+        Screens whose leading title identity is the same
+        belong to the same group.
+
+    PACK:
+        All screens in a group have the same description.
+
+    NORMAL:
+        Descriptions differ.
+
+    SINGLE:
+        Only one screen has that title identity.
+    """
+
+    grouped = defaultdict(
+        list
+    )
+
+    # --------------------------------------------------------
+    # Group by leading title identity
+    # --------------------------------------------------------
+
+    for screen in screens:
+
+        group_key = (
+            get_leading_title_identity(
+                screen["title"]
+            )
         )
 
+        grouped[
+            group_key
+        ].append(
+            screen
+        )
+
+    result = {}
+
+    for group_key, group_screens in (
+        grouped.items()
+    ):
+
+        descriptions = [
+            normalize_text(
+                screen["description"]
+            )
+            for screen in group_screens
+        ]
+
+        non_empty_descriptions = [
+            description
+            for description in descriptions
+            if description
+        ]
+
+        unique_descriptions = set(
+            non_empty_descriptions
+        )
+
+        if len(group_screens) == 1:
+
+            group_type = "single"
+
+        elif (
+            len(non_empty_descriptions)
+            == len(group_screens)
+            and len(unique_descriptions)
+            == 1
+        ):
+
+            group_type = "pack"
+
+        else:
+
+            group_type = "normal"
+
+        result[
+            group_key
+        ] = {
+            "name": group_key,
+            "type": group_type,
+            "screens": group_screens,
+        }
+
+    return dict(
+        sorted(
+            result.items(),
+            key=lambda item:
+            item[0].casefold(),
+        )
+    )
+
 
 # ============================================================
-# SCREEN DISPLAY LABEL
+# DISPLAY LABELS
 # ============================================================
 
-def make_screen_label(screen):
+def make_screen_label(
+    screen,
+):
     """
-    Create the UI label for one screen.
-
-    Example:
-        VALUATION NON FINANCE | Deeply Undervalued
+    Display title + description.
     """
 
-    title = screen["title"]
-    description = screen["description"]
+    title = screen[
+        "title"
+    ]
+
+    description = screen[
+        "description"
+    ]
 
     if description:
+
         return (
-            f"{title} | {description}"
+            f"{title} | "
+            f"{description}"
         )
 
     return title
 
 
-# ============================================================
-# UNIQUE SCREEN KEY
-# ============================================================
-
-def make_screen_key(screen):
+def make_group_label(
+    group,
+):
     """
-    Create a unique internal key.
-
-    Title alone is NOT sufficient because multiple screens
-    may share the same title.
+    Display group label.
     """
 
     return (
-        f"{screen['title']}||"
-        f"{screen['description']}||"
-        f"{screen['href']}"
+        f"{group['name'].upper()} "
+        f"({group['type'].upper()})"
     )
 
 
+def make_screen_key(
+    screen,
+):
+    """
+    href is the stable unique identity.
+    """
+
+    return screen[
+        "href"
+    ]
+
+
 # ============================================================
-# PROCESS ONE SCREEN
+# SCREEN EXECUTION
 # ============================================================
 
 def process_screen(
     session,
     screen,
 ):
-    """Send one selected screen into innerFlow."""
-
-    title = screen["title"]
-    description = screen["description"]
-    href = screen["href"]
+    """
+    Run one screen through innerFlow.
+    """
 
     screen_url = urljoin(
         BASE_URL,
-        href,
+        screen["href"],
     )
 
     print(
@@ -552,197 +793,473 @@ def process_screen(
     )
 
     print(
-        f"SCREEN TITLE: {title}"
+        f"TITLE: {screen['title']}"
     )
 
     print(
-        f"DESCRIPTION: {description}"
+        f"DESCRIPTION: "
+        f"{screen['description']}"
     )
 
     print(
-        f"SCREEN URL: {screen_url}"
+        f"URL: {screen_url}"
     )
 
     print(
         "========================================"
     )
 
-    results = scrape_screen(
+    return scrape_screen(
         session=session,
         screen_url=screen_url,
     )
 
-    return results
-
 
 # ============================================================
-# RETURN TO EXPLORE
+# MERGE
 # ============================================================
 
-def return_to_explore(session):
+def merge_screen_results(
+    screen_results,
+):
+    """
+    Union rows from multiple screens.
 
-    response = session.get(
-        EXPLORE_URL,
-        timeout=30,
+    Company identity:
+        company_id
+
+    If the same company appears in more than one screen,
+    one row is retained and the screen sources are recorded.
+    """
+
+    if not screen_results:
+
+        raise ValueError(
+            "No screen results supplied."
+        )
+
+    merged_rows = {}
+
+    source_map = defaultdict(
+        set
     )
 
-    response.raise_for_status()
+    for screen, result in (
+        screen_results
+    ):
 
-    return response
+        screen_label = (
+            make_screen_label(
+                screen
+            )
+        )
+
+        for row in result[
+            "rows"
+        ]:
+
+            company_id = row.get(
+                "company_id"
+            )
+
+            if company_id is None:
+
+                company_id = row.get(
+                    "company_name"
+                )
+
+            if company_id is None:
+
+                continue
+
+            company_id = str(
+                company_id
+            )
+
+            if company_id not in merged_rows:
+
+                merged_rows[
+                    company_id
+                ] = dict(
+                    row
+                )
+
+            else:
+
+                existing = merged_rows[
+                    company_id
+                ]
+
+                for key, value in (
+                    row.items()
+                ):
+
+                    if key not in existing:
+
+                        existing[
+                            key
+                        ] = value
+
+            source_map[
+                company_id
+            ].add(
+                screen_label
+            )
+
+    rows = []
+
+    for company_id, row in (
+        merged_rows.items()
+    ):
+
+        row[
+            "screen_sources"
+        ] = " | ".join(
+            sorted(
+                source_map[
+                    company_id
+                ]
+            )
+        )
+
+        rows.append(
+            row
+        )
+
+    return rows
 
 
 # ============================================================
-# MAIN OUTER FLOW
+# OUTPUT NAME
 # ============================================================
 
-def run_outer_flow(selected_screens):
+def make_safe_filename(
+    value,
+):
     """
-    Scrape only the screens selected in the dashboard.
-
-    selected_screens is a list of dictionaries:
-
-        {
-            "title": "...",
-            "description": "...",
-            "href": "..."
-        }
+    Make a filesystem-safe filename.
     """
+
+    value = normalize_text(
+        value
+    )
+
+    value = re.sub(
+        r"[^a-z0-9]+",
+        "_",
+        value,
+    )
+
+    return value.strip(
+        "_"
+    )
+
+
+def make_selection_output_name(
+    group,
+    selected_screens,
+    mode,
+):
+    """
+    Create a readable but unique output filename.
+    """
+
+    group_name = make_safe_filename(
+        group["name"]
+    )
+
+    mode_name = make_safe_filename(
+        mode
+    )
+
+    screen_part = "__".join(
+        make_safe_filename(
+            screen["title"]
+        )
+        for screen in selected_screens
+    )
+
+    if len(
+        screen_part
+    ) > 120:
+
+        href_string = "|".join(
+            screen["href"]
+            for screen in selected_screens
+        )
+
+        digest = hashlib.sha1(
+            href_string.encode(
+                "utf-8"
+            )
+        ).hexdigest()[:10]
+
+        screen_part = (
+            f"{len(selected_screens)}"
+            f"_screens_{digest}"
+        )
+
+    return (
+        f"{group_name}__"
+        f"{mode_name}__"
+        f"{screen_part}"
+    )
+
+
+# ============================================================
+# SAVE
+# ============================================================
+
+def save_results_csv(
+    rows,
+    output_name,
+):
+    """
+    Save one Single/Merge result CSV.
+    """
+
+    GROUPS_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    safe_name = (
+        make_safe_filename(
+            output_name
+        )
+    )
+
+    output_file = (
+        GROUPS_DIR
+        / f"{safe_name}.csv"
+    )
+
+    if not rows:
+
+        with open(
+            output_file,
+            "w",
+            newline="",
+            encoding="utf-8-sig",
+        ) as file:
+
+            writer = csv.writer(
+                file
+            )
+
+            writer.writerow(
+                ["company_id"]
+            )
+
+        return output_file
+
+    headers = []
+
+    for row in rows:
+
+        for key in row.keys():
+
+            if key not in headers:
+
+                headers.append(
+                    key
+                )
+
+    with open(
+        output_file,
+        "w",
+        newline="",
+        encoding="utf-8-sig",
+    ) as file:
+
+        writer = csv.DictWriter(
+            file,
+            fieldnames=headers,
+            extrasaction="ignore",
+        )
+
+        writer.writeheader()
+
+        writer.writerows(
+            rows
+        )
+
+    print(
+        f"Saved {len(rows)} rows:"
+    )
+
+    print(
+        output_file.resolve()
+    )
+
+    return output_file
+
+
+# ============================================================
+# RUN SELECTION
+# ============================================================
+
+def run_selection(
+    group,
+    selected_screens,
+    mode,
+):
+    """
+    Run the selected screens.
+
+    SINGLE:
+        exactly one screen
+
+    MERGE:
+        two or more screens
+
+    PACK:
+        dashboard sends all screens as MERGE
+    """
+
+    if not group:
+
+        raise ValueError(
+            "No group supplied."
+        )
 
     if not selected_screens:
+
         raise ValueError(
-            "No Screener screens selected."
+            "No screens selected."
         )
 
-    session = create_screener_session()
+    mode = normalize_text(
+        mode
+    )
 
-    all_results = {}
+    if group["type"] == "pack":
+
+        mode = "merge"
+
+        selected_screens = (
+            group["screens"]
+        )
+
+    elif group["type"] == "single":
+
+        mode = "single"
+
+    if mode == "single":
+
+        if len(
+            selected_screens
+        ) != 1:
+
+            raise ValueError(
+                "Single mode requires "
+                "exactly one screen."
+            )
+
+    elif mode == "merge":
+
+        if len(
+            selected_screens
+        ) < 2:
+
+            raise ValueError(
+                "Merge mode requires at least "
+                "two screens."
+            )
+
+    else:
+
+        raise ValueError(
+            "Mode must be Single or Merge."
+        )
+
+    session = (
+        create_screener_session()
+    )
+
+    screen_results = []
 
     try:
-
-        print(
-            "\n========================================"
-        )
-
-        print(
-            "SCREENER OUTER FLOW"
-        )
-
-        print(
-            "========================================"
-        )
-
-        # ----------------------------------------------------
-        # 1. Authenticate
-        # ----------------------------------------------------
 
         authenticate_screener(
             session
         )
 
-        # ----------------------------------------------------
-        # 2. Process selected screens
-        # ----------------------------------------------------
+        for screen in selected_screens:
 
-        for index, screen in enumerate(
-            selected_screens,
-            start=1,
-        ):
-
-            results = process_screen(
+            result = process_screen(
                 session=session,
                 screen=screen,
             )
 
-            title = screen["title"]
-            description = screen["description"]
-
-            # ------------------------------------------------
-            # Build UNIQUE CSV label
-            # ------------------------------------------------
-            #
-            # Example:
-            # valuation_non_finance__deeply_undervalued.csv
-            #
-            # Existing innerFlow handles the safe filename
-            # conversion.
-            #
-
-            if description:
-
-                group_name = (
-                    f"{title}__{description}"
+            screen_results.append(
+                (
+                    screen,
+                    result,
                 )
-
-            else:
-
-                group_name = title
-
-            output_file = save_group_csv(
-                group_name=group_name,
-                rows=results["rows"],
-                group_number=None,
             )
 
-            result_key = make_screen_key(
+            if (
                 screen
-            )
+                != selected_screens[-1]
+            ):
 
-            all_results[result_key] = {
-                "title": title,
-                "description": description,
-                "href": screen["href"],
-                "file": output_file,
-                **results,
-            }
-
-            # ------------------------------------------------
-            # Return to Explore
-            # ------------------------------------------------
-
-            if index < len(selected_screens):
-
-                return_to_explore(
-                    session
+                time.sleep(
+                    1
                 )
 
-                time.sleep(1)
+        # ----------------------------------------------------
+        # SINGLE
+        # ----------------------------------------------------
 
-        print(
-            "\n========================================"
+        if mode == "single":
+
+            rows = (
+                screen_results[0][1][
+                    "rows"
+                ]
+            )
+
+        # ----------------------------------------------------
+        # MERGE
+        # ----------------------------------------------------
+
+        else:
+
+            rows = merge_screen_results(
+                screen_results
+            )
+
+        output_name = (
+            make_selection_output_name(
+                group=group,
+                selected_screens=selected_screens,
+                mode=mode,
+            )
         )
 
-        print(
-            "SCREENER OUTER FLOW COMPLETE"
+        output_file = (
+            save_results_csv(
+                rows=rows,
+                output_name=output_name,
+            )
         )
 
-        print(
-            "========================================"
-        )
-
-        return all_results
-
-    except requests.RequestException as exc:
-
-        print(
-            f"\nSCREENER REQUEST ERROR: {exc}"
-        )
-
-        raise
-
-    except Exception as exc:
-
-        print(
-            f"\nSCREENER OUTER FLOW ERROR: {exc}"
-        )
-
-        raise
+        return {
+            "group": group,
+            "mode": mode,
+            "screens": selected_screens,
+            "rows": rows,
+            "row_count": len(rows),
+            "file": output_file,
+        }
 
     finally:
 
         session.close()
 
         print(
-            "\nScreener session closed."
+            "Screener selection session closed."
         )
 
 
@@ -752,22 +1269,39 @@ def run_outer_flow(selected_screens):
 
 if __name__ == "__main__":
 
-    print(
-        "Discovering Screener custom screens..."
+    screens = (
+        discover_custom_screens()
     )
 
-    screens = discover_custom_screens()
-
-    print(
-        "\nCUSTOM SCREENS FOUND"
+    groups = (
+        build_screen_groups(
+            screens
+        )
     )
 
-    for index, screen in enumerate(
-        screens,
-        start=1,
-    ):
+    print(
+        "\n========================================"
+    )
+
+    print(
+        "DISCOVERED GROUPS"
+    )
+
+    print(
+        "========================================"
+    )
+
+    for group in groups.values():
 
         print(
-            f"{index}. "
-            f"{make_screen_label(screen)}"
+            f"\n{make_group_label(group)}"
         )
+
+        for screen in (
+            group["screens"]
+        ):
+
+            print(
+                f"  - "
+                f"{make_screen_label(screen)}"
+            )
