@@ -73,7 +73,7 @@ st.markdown(
         }
     }
 
-    html, body, [class*="st-"] {
+    html, body, .stApp {
         font-family: 'Inter', system-ui, sans-serif !important;
     }
 
