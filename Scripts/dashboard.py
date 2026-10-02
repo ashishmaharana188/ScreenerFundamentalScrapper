@@ -42,478 +42,226 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    /* ============================================================
-       MONOCHROME THEME
-       Light:  black button / white text
-       Hover:  white button / black text
-       Dark:   white button / black text
-       Hover:  black button / white text
-       ============================================================ */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
     :root {
-        color-scheme: light;
-        --bg: white;
-        --fg: black;
-        --button-bg: black;
-        --button-fg: white;
-        --line: black;
+        --bg: #F8FAFC;
+        --surface: #FFFFFF;
+        --border: #E2E8F0;
+        --fg: #0F172A;
+        --muted: #64748B;
+        --accent: #0F172A;
+        --accent-hover: #334155;
+        --radius: 8px;
+        --shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
     }
 
-    html,
-    body,
-    .stApp,
-    [data-testid="stAppViewContainer"],
-    [data-testid="stMain"],
-    [data-testid="stMainBlockContainer"] {
-        background: var(--bg) !important;
+    @media (prefers-color-scheme: dark) {
+        :root {
+            --bg: #0F172A;
+            --surface: #1E293B;
+            --border: #334155;
+            --fg: #F8FAFC;
+            --muted: #94A3B8;
+            --accent: #F8FAFC;
+            --accent-hover: #E2E8F0;
+        }
+    }
+
+    html, body, [class*="st-"] {
+        font-family: 'Inter', system-ui, sans-serif !important;
+    }
+
+    .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+        background-color: var(--bg) !important;
         color: var(--fg) !important;
     }
 
-    header[data-testid="stHeader"] {
-        background: var(--bg) !important;
-        border-bottom: 1px solid var(--line) !important;
-    }
-
-    #MainMenu,
-    footer {
+    header[data-testid="stHeader"], footer, #MainMenu {
         display: none !important;
     }
 
     .block-container {
-        max-width: 1380px;
-        padding-top: 0.65rem;
-        padding-bottom: 1.5rem;
-        padding-left: clamp(0.55rem, 1.15vw, 1rem);
-        padding-right: clamp(0.55rem, 1.15vw, 1rem);
+        max-width: 1200px;
+        padding: 2.5rem 2rem;
     }
 
-    /* ============================================================
-       HEADER
-       ============================================================ */
-
+    /* HEADER */
     .app-header {
+        background: var(--surface);
+        padding: 1.5rem;
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+        border: 1px solid var(--border);
+        margin-bottom: 2.5rem;
         display: flex;
-        align-items: center;
         justify-content: space-between;
-        gap: 0.75rem;
-        margin-bottom: 0.55rem;
-        padding: 0.8rem 0.9rem;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: var(--bg);
-    }
-
-    .app-header-left {
-        min-width: 0;
-    }
-
-    .app-eyebrow {
-        margin: 0 0 0.15rem 0;
-        color: var(--fg) !important;
-        font-size: 0.72rem;
-        font-weight: 800;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
+        align-items: center;
     }
 
     .app-title {
-        margin: 0;
-        color: var(--fg) !important;
-        font-size: clamp(1.55rem, 2.45vw, 2.05rem);
-        font-weight: 800;
-        letter-spacing: -0.04em;
-        line-height: 1.03;
+        font-size: 1.5rem;
+        font-weight: 600;
+        margin: 0 0 0.5rem 0;
+        color: var(--fg);
+        letter-spacing: -0.02em;
     }
 
     .app-subtitle {
-        margin: 0.32rem 0 0 0;
-        color: var(--fg) !important;
-        font-size: 0.84rem;
-        line-height: 1.4;
-        max-width: 820px;
+        font-size: 0.875rem;
+        color: var(--muted);
+        margin: 0;
+        line-height: 1.5;
     }
 
     .app-badge {
-        flex: 0 0 auto;
-        padding: 0.3rem 0.46rem;
-        border: 1px solid var(--button-bg);
-        border-radius: 5px;
-        background: var(--button-bg);
-        color: var(--button-fg) !important;
-        font-size: 0.64rem;
-        font-weight: 800;
-    }
-
-    /* ============================================================
-       SECTION FLAG LINE
-       ============================================================ */
-
-    .section-heading {
-        display: flex;
-        align-items: flex-end;
-        justify-content: space-between;
-        gap: 0.75rem;
-        width: 100%;
-        margin: 1rem 0 0.7rem 0;
-        padding: 0 0 0.5rem 0;
-        border-bottom: 1px solid var(--line);
-        background: transparent !important;
-    }
-
-    .section-heading-main {
-        display: flex;
-        align-items: flex-start;
-        gap: 0.62rem;
-        min-width: 0;
-    }
-
-    .section-number {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 1.65rem;
-        height: 1.65rem;
-        flex: 0 0 1.65rem;
-        border: 1px solid var(--button-bg);
-        border-radius: 4px;
-        background: var(--button-bg);
-        color: var(--button-fg) !important;
-        font-size: 0.68rem;
-        font-weight: 800;
-    }
-
-    .section-title {
-        margin: 0;
-        color: var(--fg) !important;
-        font-size: 1.04rem;
-        font-weight: 800;
-        line-height: 1.2;
-    }
-
-    .section-description {
-        margin: 0.18rem 0 0 0;
-        color: var(--fg) !important;
-        font-size: 0.78rem;
-        line-height: 1.35;
-    }
-
-    .section-state {
-        flex: 0 0 auto;
-        padding: 0.28rem 0.46rem;
-        border: 1px solid var(--line);
-        border-radius: 4px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        padding: 0.35rem 0.75rem;
         background: var(--bg);
-        color: var(--fg) !important;
-        font-size: 0.66rem;
-        font-weight: 700;
-        white-space: nowrap;
-    }
-
-    /* ============================================================
-       METRICS
-       ============================================================ */
-
-    .metric-grid {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 0.5rem;
-        margin: 0.55rem 0 0.75rem 0;
-    }
-
-    .metric-card {
-        min-width: 0;
-        padding: 0.58rem 0.66rem;
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 9999px;
         color: var(--fg);
     }
 
+    /* SECTIONS */
+    .section-heading {
+        margin: 2.5rem 0 1.5rem 0;
+        display: flex;
+        align-items: flex-start;
+        gap: 1rem;
+    }
+
+    .section-title {
+        font-size: 1.125rem;
+        font-weight: 600;
+        color: var(--fg);
+        margin: 0 0 0.25rem 0;
+        letter-spacing: -0.01em;
+    }
+
+    .section-description {
+        font-size: 0.875rem;
+        color: var(--muted);
+        margin: 0;
+        line-height: 1.5;
+    }
+
+    .section-state {
+        margin-left: auto;
+        font-size: 0.75rem;
+        font-weight: 500;
+        color: var(--muted);
+        background: var(--surface);
+        padding: 0.25rem 0.75rem;
+        border-radius: 9999px;
+        border: 1px solid var(--border);
+    }
+
+    /* METRICS */
+    .metric-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 1rem;
+        margin-bottom: 2rem;
+    }
+
+    .metric-card {
+        background: var(--surface);
+        padding: 1.25rem;
+        border-radius: var(--radius);
+        border: 1px solid var(--border);
+        box-shadow: var(--shadow);
+    }
+
     .metric-label {
-        color: var(--fg) !important;
-        font-size: 0.64rem;
-        font-weight: 800;
+        font-size: 0.75rem;
+        font-weight: 500;
+        color: var(--muted);
         text-transform: uppercase;
         letter-spacing: 0.05em;
     }
 
     .metric-value {
-        margin-top: 0.12rem;
-        color: var(--fg) !important;
-        font-size: 1.04rem;
-        font-weight: 800;
-        letter-spacing: -0.02em;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    /* ============================================================
-       RESULTS
-       ============================================================ */
-
-    .result-banner {
-        margin: 0.4rem 0;
-        padding: 0.58rem 0.68rem;
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        background: var(--bg);
-    }
-
-    .result-title,
-    .result-meta,
-    .empty-state {
-        color: var(--fg) !important;
-    }
-
-    .result-title {
-        margin: 0;
-        font-weight: 800;
-        font-size: 0.88rem;
-    }
-
-    .result-meta {
-        margin-top: 0.08rem;
-        font-size: 0.72rem;
-    }
-
-    .screen-chip {
-        display: inline-block;
-        margin: 0.08rem 0.16rem 0.08rem 0;
-        padding: 0.2rem 0.34rem;
-        border: 1px solid var(--line);
-        border-radius: 4px;
-        background: var(--bg);
-        color: var(--fg) !important;
-        font-size: 0.66rem;
-        line-height: 1.15;
-    }
-
-    .empty-state {
-        padding: 0.74rem;
-        text-align: center;
-        border: 1px dashed var(--line);
-        border-radius: 6px;
-        background: var(--bg);
-        font-size: 0.76rem;
-    }
-
-    /* ============================================================
-       TEXT
-       ============================================================ */
-
-    label,
-    [data-testid="stWidgetLabel"],
-    [data-testid="stWidgetLabel"] *,
-    [data-testid="stMarkdownContainer"] *,
-    .stCaption,
-    .stMarkdown,
-    p,
-    span {
+        font-size: 1.5rem;
+        font-weight: 600;
         color: var(--fg);
+        margin-top: 0.5rem;
+        letter-spacing: -0.02em;
     }
 
-    /* ============================================================
-       BUTTONS
-       ============================================================ */
-
-    div[data-testid="stButton"],
-    div[data-testid="stDownloadButton"] {
-        width: fit-content !important;
-    }
-
+    /* BUTTONS */
     div[data-testid="stButton"] > button,
     div[data-testid="stDownloadButton"] > button {
-        width: auto !important;
-        min-width: 92px !important;
-        min-height: 1.72rem !important;
-        height: 1.72rem !important;
-        padding: 0.16rem 0.56rem !important;
-        margin: 0 !important;
-        border: 1px solid var(--button-bg) !important;
-        border-radius: 5px !important;
-        background: var(--button-bg) !important;
-        color: var(--button-fg) !important;
-        box-shadow: none !important;
-        font-size: 0.70rem !important;
-        font-weight: 800 !important;
-        line-height: 1 !important;
-        transition: none !important;
-        transform: none !important;
+        background: var(--surface) !important;
+        color: var(--fg) !important;
+        border: 1px solid var(--border) !important;
+        border-radius: 6px !important;
+        font-weight: 500 !important;
+        padding: 0.5rem 1rem !important;
+        min-height: 2.25rem !important;
+        box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05) !important;
+        transition: all 0.15s ease !important;
     }
 
-    div[data-testid="stButton"] > button *,
-    div[data-testid="stDownloadButton"] > button * {
-        color: inherit !important;
-        fill: currentColor !important;
-        stroke: currentColor !important;
+    div[data-testid="stButton"] > button[kind="primary"] {
+        background: var(--accent) !important;
+        color: var(--bg) !important;
+        border-color: var(--accent) !important;
     }
 
-    /* Hover/focus/active always flips the monochrome pair. */
     div[data-testid="stButton"] > button:hover,
-    div[data-testid="stButton"] > button:focus,
-    div[data-testid="stButton"] > button:focus-visible,
-    div[data-testid="stButton"] > button:active,
-    div[data-testid="stDownloadButton"] > button:hover,
-    div[data-testid="stDownloadButton"] > button:focus,
-    div[data-testid="stDownloadButton"] > button:focus-visible,
-    div[data-testid="stDownloadButton"] > button:active {
-        background: var(--bg) !important;
-        color: var(--fg) !important;
-        border-color: var(--line) !important;
-        box-shadow: none !important;
-        transform: none !important;
+    div[data-testid="stDownloadButton"] > button:hover {
+        border-color: var(--muted) !important;
+        box-shadow: var(--shadow) !important;
     }
 
-    /* ============================================================
-       DROPDOWNS
-       ============================================================ */
-
+    /* INPUTS & DROPDOWNS */
     div[data-testid="stSelectbox"] [data-baseweb="select"],
-    div[data-testid="stMultiSelect"] [data-baseweb="select"] {
-        min-height: 2.65rem !important;
-        border: 1px solid var(--line) !important;
+    div[data-testid="stMultiSelect"] [data-baseweb="select"],
+    div[data-testid="stTextInput"] input {
+        border: 1px solid var(--border) !important;
         border-radius: 6px !important;
-        background: var(--bg) !important;
+        background: var(--surface) !important;
         color: var(--fg) !important;
-        box-shadow: none !important;
-    }
-
-    div[data-testid="stSelectbox"] [data-baseweb="select"] > div,
-    div[data-testid="stMultiSelect"] [data-baseweb="select"] > div {
-        min-height: 2.63rem !important;
-        background: var(--bg) !important;
-        color: var(--fg) !important;
-    }
-
-    div[data-testid="stSelectbox"] input,
-    div[data-testid="stMultiSelect"] input,
-    div[data-testid="stTextInput"] input,
-    div[data-testid="stNumberInput"] input {
-        color: var(--fg) !important;
-        background: var(--bg) !important;
-        font-size: 0.88rem !important;
-    }
-
-    /* Kill BaseWeb's red tags. */
-    div[data-testid="stMultiSelect"] [data-baseweb="tag"],
-    div[data-testid="stMultiSelect"] span[data-baseweb="tag"] {
-        margin: 0.15rem 0.16rem 0.15rem 0 !important;
-        padding: 0.22rem 0.36rem !important;
-        border: 1px solid var(--button-bg) !important;
-        border-radius: 4px !important;
-        background: var(--button-bg) !important;
-        color: var(--button-fg) !important;
-        font-size: 0.70rem !important;
-    }
-
-    div[data-testid="stMultiSelect"] [data-baseweb="tag"] *,
-    div[data-testid="stMultiSelect"] [data-baseweb="tag"] svg {
-        color: var(--button-fg) !important;
-        fill: var(--button-fg) !important;
-        stroke: var(--button-fg) !important;
-    }
-
-    /* Dropdown menu surfaces. */
-    div[data-baseweb="popover"],
-    div[data-baseweb="popover"] > div,
-    div[data-baseweb="menu"],
-    div[data-baseweb="menu"] > div,
-    div[role="listbox"],
-    div[role="option"] {
-        background: var(--bg) !important;
-        color: var(--fg) !important;
-    }
-
-    div[data-baseweb="option"]:hover,
-    div[data-baseweb="option"][aria-selected="true"],
-    div[data-baseweb="option"][data-highlighted="true"],
-    div[role="option"]:hover,
-    div[role="option"][aria-selected="true"] {
-        background: var(--button-bg) !important;
-        color: var(--button-fg) !important;
-    }
-
-    /* ============================================================
-       OTHER WIDGETS
-       ============================================================ */
-
-    div[data-testid="stTextInput"] input,
-    div[data-testid="stNumberInput"] input {
         min-height: 2.5rem !important;
-        border: 1px solid var(--line) !important;
-        border-radius: 6px !important;
-        box-shadow: none !important;
     }
 
-    div[data-testid="stCheckbox"] label,
-    div[data-testid="stRadio"] label,
-    div[data-testid="stToggle"] label {
-        color: var(--fg) !important;
-        font-size: 0.82rem !important;
-    }
-
-    input,
-    textarea,
-    select,
-    button {
-        accent-color: var(--button-bg) !important;
-    }
-
-    div[data-testid="stAlert"],
-    div[data-testid="stExpander"] {
-        border: 1px solid var(--line) !important;
-        border-radius: 6px !important;
+    div[data-testid="stMultiSelect"] [data-baseweb="tag"] {
         background: var(--bg) !important;
+        border: 1px solid var(--border) !important;
         color: var(--fg) !important;
-        box-shadow: none !important;
+        border-radius: 4px !important;
     }
 
-    div[data-testid="stAlert"] *,
-    div[data-testid="stExpander"] *,
-    div[data-testid="stAlert"] svg {
-        color: var(--fg) !important;
-        fill: currentColor !important;
-        stroke: currentColor !important;
-    }
-
+    /* DATAFRAMES & BANNERS */
     div[data-testid="stDataFrame"] {
-        border: 1px solid var(--line) !important;
-        border-radius: 6px !important;
-        overflow: hidden;
+        border: 1px solid var(--border) !important;
+        border-radius: var(--radius) !important;
+        background: var(--surface);
+    }
+    
+    .result-banner {
+        background: var(--surface);
+        padding: 1rem 1.25rem;
+        border-radius: var(--radius);
+        border: 1px solid var(--border);
+        margin: 1rem 0;
+    }
+    
+    .result-title {
+        font-weight: 600;
+        font-size: 1rem;
+        margin: 0 0 0.25rem 0;
+        color: var(--fg);
+    }
+    
+    .result-meta {
+        font-size: 0.875rem;
+        color: var(--muted);
     }
 
-    /* ============================================================
-       DARK THEME
-       ============================================================ */
-
-    @media (prefers-color-scheme: dark) {
-        :root {
-            color-scheme: dark;
-            --bg: black;
-            --fg: white;
-            --button-bg: white;
-            --button-fg: black;
-            --line: white;
-        }
-    }
-
-    html[data-theme="dark"],
-    body[data-theme="dark"],
-    .stApp[data-theme="dark"],
-    [data-theme="dark"] {
-        --bg: black;
-        --fg: white;
-        --button-bg: white;
-        --button-fg: black;
-        --line: white;
-        color-scheme: dark;
-    }
-
-    /* ============================================================
-       SCREENER CONNECTION STATUS
-       ============================================================ */
-
+    /* SCREENER CONNECTION STATUS */
     .connection-row {
         display: flex;
         align-items: center;
@@ -527,12 +275,11 @@ st.markdown(
         height: 0.62rem;
         flex: 0 0 0.62rem;
         border-radius: 50%;
-        border: 1px solid var(--fg);
-        background: var(--fg);
+        background: #10B981;
     }
 
     .connection-dot.offline {
-        background: transparent;
+        background: var(--muted);
     }
 
     .connection-main {
@@ -541,89 +288,44 @@ st.markdown(
         flex-wrap: wrap;
         gap: 0.42rem;
         color: var(--fg);
-        font-size: 0.78rem;
-        font-weight: 800;
-    }
-
-    /* ============================================================
-       RESPONSIVE
-       ============================================================ */
-
-    @media (max-width: 900px) {
-        .app-badge {
-            display: none;
-        }
-
-        .metric-grid {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-        }
-
-        .section-heading {
-            align-items: flex-start;
-        }
-    }
-
-    @media (max-width: 600px) {
-        .block-container {
-            padding-top: 0.4rem;
-            padding-left: 0.35rem;
-            padding-right: 0.35rem;
-        }
-
-        .app-title {
-            font-size: 1.38rem;
-        }
-
-        .app-subtitle {
-            font-size: 0.74rem;
-        }
-
-        .section-heading {
-            margin-top: 0.78rem;
-            padding-bottom: 0.42rem;
-        }
-
-        .section-title {
-            font-size: 0.94rem;
-        }
-
-        .section-description {
-            font-size: 0.70rem;
-        }
-
-        .section-state {
-            font-size: 0.60rem;
-        }
-
-        .metric-grid {
-            grid-template-columns: 1fr 1fr;
-            gap: 0.35rem;
-        }
-
-        .metric-card {
-            padding: 0.48rem 0.52rem;
-        }
-
-        .metric-value {
-            font-size: 0.90rem;
-        }
-
-        div[data-testid="stButton"],
-        div[data-testid="stDownloadButton"] {
-            width: 100% !important;
-        }
-
-        div[data-testid="stButton"] > button,
-        div[data-testid="stDownloadButton"] > button {
-            width: 100% !important;
-            min-width: 0 !important;
-        }
+        font-size: 0.875rem;
+        font-weight: 500;
     }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
+
+# ============================================================
+# HELPERS (Updated for Minimalist DOM)
+# ============================================================
+
+def _section_header(
+    number: str,
+    title: str,
+    description: str,
+    state: str | None = None,
+) -> None:
+    """Renders a section header. The `number` parameter is retained to prevent breaking existing positional arguments, but is omitted from the UI."""
+    state_html = (
+        f'<div class="section-state">{state}</div>'
+        if state
+        else ""
+    )
+
+    st.markdown(
+        f"""
+        <div class="section-heading">
+            <div>
+                <div class="section-title">{title}</div>
+                <div class="section-description">{description}</div>
+            </div>
+            {state_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 # ============================================================
 # SESSION STATE
@@ -892,27 +594,6 @@ def _remember_file_result(
         )
 
 
-# ============================================================
-# HEADER
-# ============================================================
-
-st.markdown(
-    """
-    <div class="app-header">
-        <div class="app-header-left">
-            <p class="app-eyebrow">Research Workspace</p>
-            <h1 class="app-title">Fundamental Scanner</h1>
-            <p class="app-subtitle">
-                Build a market universe with ScanX, run your discovered
-                Screener screens, and inspect the resulting datasets here.
-            </p>
-        </div>
-        <div class="app-badge">SCANX · SCREENER</div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
 
 # ============================================================
 # TOP STATUS
@@ -943,7 +624,6 @@ _metric_grid(
 # STEP 1: SCANX
 # ============================================================
 _section_header(
-    "1",
     "Build ScanX universe",
     "Select one or more industries. Sector is optional and can be left empty.",
     (
@@ -1062,7 +742,6 @@ screener_state_label = (
 )
 
 _section_header(
-    "2",
     "Run Screener screens",
     "Connect with your own Screener account. Each account gets its own saved session.",
     screener_state_label,
@@ -1556,7 +1235,6 @@ if screener_groups:
 # STEP 3: COMPARISON
 # ============================================================
 _section_header(
-    "3",
     "Compare saved datasets",
     "Intersect the ScanX universe with selected Screener datasets and inspect the final CSV.",
 )
@@ -1726,7 +1404,6 @@ last_file = st.session_state.get("last_result_file")
 
 if last_df is not None and last_title:
     _section_header(
-        "4",
         "Latest CSV result",
         "The most recent completed Screener or pack run remains available here after Streamlit reruns.",
         f"{len(last_df):,} rows",
