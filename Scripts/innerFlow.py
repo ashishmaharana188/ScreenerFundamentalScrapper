@@ -5,7 +5,7 @@ import time
 from urllib.parse import urljoin, urlsplit, urlunsplit, parse_qs, urlencode
 import csv
 from pathlib import Path
-
+from storage import GROUPS_DIR, FINAL_DIR, upload_file
 
 from bs4 import BeautifulSoup
 
@@ -826,7 +826,7 @@ def save_group_csv(
         writer.writerows(
             rows
         )
-
+    upload_file(file_path)
     print(
         f"Saved {len(rows)} rows:"
     )
@@ -910,7 +910,7 @@ def save_final_csv(
         writer.writerows(
             rows
         )
-
+    upload_file(file_path)
     print(
         f"Saved final data: "
         f"{len(rows)} rows"

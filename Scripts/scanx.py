@@ -14,6 +14,7 @@ import csv
 import json
 import time
 from pathlib import Path
+from storage import SCANX_DIR, upload_file
 from typing import Any
 
 import requests
@@ -32,7 +33,7 @@ REQUEST_TIMEOUT = 30
 MAX_RETRIES = 4
 RETRY_DELAYS = (2, 5, 10, 20)
 
-OUTPUT_DIR = Path("scanx_data")
+OUTPUT_DIR = SCANX_DIR
 OUTPUT_FILE = OUTPUT_DIR / "scanx_company_names.csv"
 
 
@@ -803,6 +804,8 @@ def save_company_names(
                     "sector": record.get("sector", ""),
                 }
             )
+            
+            upload_file(file_path)
 
     print(f"Saved: {file_path.resolve()}")
     print(f"Rows written: {len(records)}")

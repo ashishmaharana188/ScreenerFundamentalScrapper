@@ -14,68 +14,54 @@ companies appear in a fixed set of screens.
 
 from __future__ import annotations
 
-import os
 import re
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 
+from storage import (
+    STORAGE_BACKEND,
+    GROUPS_DIR,
+    COMPARISON_DIR,
+    SCANX_DIR,
+    ensure_storage_dirs,
+    file_exists,
+    list_files,
+    upload_file,
+)
+
 
 # ============================================================
-# STORAGE RESOLUTION
+# STORAGE
 # ============================================================
 #
-# Local:
-#     APP_STORAGE_ROOT is normally unset.
-#     Project root is used.
+# storage.py is the single source of truth for storage paths.
 #
-# Render:
-#     APP_STORAGE_ROOT=/var/data
-#     Persistent disk becomes the storage root.
+# LOCAL
+#     STORAGE_BACKEND=local
+#     Files remain in the normal project directories:
+#         scanx_data/
+#         screener_data/groups/
+#         screener_data/final/
+#         screener_data/comparison/
+#         session/
 #
-# The fallback intentionally reads APP_STORAGE_ROOT itself so Render
-# still works even if storage.py is not importable from Scripts/.
+# SUPABASE
+#     STORAGE_BACKEND=supabase
+#     storage.py lists/downloads files from Supabase into its local
+#     cache, while uploads persist newly generated files remotely.
+#
+# This module therefore does not define its own APP_STORAGE_ROOT or
+# deployment-specific filesystem.
 # ============================================================
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
-_ENV_STORAGE_ROOT = os.getenv("APP_STORAGE_ROOT", "").strip()
-
-if _ENV_STORAGE_ROOT:
-    STORAGE_ROOT = Path(_ENV_STORAGE_ROOT).expanduser().resolve()
-else:
-    STORAGE_ROOT = PROJECT_ROOT.resolve()
-
-
-try:
-    from storage import (
-        STORAGE_ROOT as _CENTRAL_STORAGE_ROOT,
-        GROUPS_DIR as _CENTRAL_GROUPS_DIR,
-        COMPARISON_DIR as _CENTRAL_COMPARISON_DIR,
-        SCANX_DIR as _CENTRAL_SCANX_DIR,
-    )
-
-    # storage.py is the source of truth when it is importable and its
-    # root matches the environment configuration.
-    GROUPS_DIR = _CENTRAL_GROUPS_DIR
-    COMPARISON_DIR = _CENTRAL_COMPARISON_DIR
-    SCANX_DIR = _CENTRAL_SCANX_DIR
-
-except ImportError:
-    BASE_DATA_DIR = STORAGE_ROOT / "screener_data"
-    GROUPS_DIR = BASE_DATA_DIR / "groups"
-    COMPARISON_DIR = BASE_DATA_DIR / "comparison"
-    SCANX_DIR = STORAGE_ROOT / "scanx_data"
-
-
-# Preserve compatibility with files created by the older relative-path
-# implementation during local development. Only enabled when Render
-# storage has not explicitly been selected.
 LEGACY_SCANX_DIR = (Path.cwd() / "scanx_data").resolve()
 LEGACY_GROUPS_DIR = (
     Path.cwd() / "screener_data" / "groups"
 ).resolve()
+
+
 
 
 # ============================================================
@@ -124,33 +110,33 @@ def _unique_csv_files(
 
 
 def get_scanx_files() -> list[Path]:
-    """
-    Return available ScanX CSV files.
+    """Return available ScanX CSV files from the active storage backend."""
 
-    Local development also checks the legacy cwd-based directory so files
-    created before storage.py was introduced remain visible.
-    """
-    directories = [SCANX_DIR]
+    files = list_files(SCANX_DIR, "*.csv")
 
-    if not _ENV_STORAGE_ROOT:
-        directories.append(LEGACY_SCANX_DIR)
+    # Preserve visibility of older local files created before storage.py
+    # became the central storage layer. Never consult this fallback when
+    # using Supabase.
+    if not files and STORAGE_BACKEND == "local":
+        if LEGACY_SCANX_DIR != SCANX_DIR:
+            files = _unique_csv_files([LEGACY_SCANX_DIR])
 
-    return _unique_csv_files(directories)
+    return files
 
 
 def get_screener_files() -> list[Path]:
-    """
-    Return available Screener CSV files.
+    """Return available Screener CSV files from the active storage backend."""
 
-    Local development also checks the legacy cwd-based directory so files
-    created before storage.py was introduced remain visible.
-    """
-    directories = [GROUPS_DIR]
+    files = list_files(GROUPS_DIR, "*.csv")
 
-    if not _ENV_STORAGE_ROOT:
-        directories.append(LEGACY_GROUPS_DIR)
+    # Preserve visibility of older local files created before storage.py
+    # became the central storage layer. Never consult this fallback when
+    # using Supabase.
+    if not files and STORAGE_BACKEND == "local":
+        if LEGACY_GROUPS_DIR != GROUPS_DIR:
+            files = _unique_csv_files([LEGACY_GROUPS_DIR])
 
-    return _unique_csv_files(directories)
+    return files
 
 
 # ============================================================
@@ -398,6 +384,10 @@ def compare_scanx_with_screener(
         encoding="utf-8-sig",
     )
 
+    # Persist comparison output when using Supabase. In local mode this
+    # simply returns without changing the local-file behavior.
+    upload_file(output_file)
+
     print(
         f"Level 1 | {screener_file.name} | "
         f"ScanX companies={len(scanx_df)} | "
@@ -484,6 +474,10 @@ def run_level_2(
         encoding="utf-8-sig",
     )
 
+    # Persist comparison output when using Supabase. In local mode this
+    # simply returns without changing the local-file behavior.
+    upload_file(output_file)
+
     print(
         f"Level 2 | selected Screener files={len(dataframes)} | "
         f"Common companies={len(common_df)}"
@@ -502,21 +496,17 @@ def run_comparison(
 ) -> dict:
     """Run Level 1 and, when possible, Level 2 comparison."""
 
-    if not scanx_file.exists():
-        raise FileNotFoundError(
-            f"ScanX file not found: {scanx_file}"
-        )
-
     if not screener_files:
         raise ValueError("No Screener files selected.")
 
-    # Ensure the active storage tree exists.
-    GROUPS_DIR.mkdir(parents=True, exist_ok=True)
-    COMPARISON_DIR.mkdir(parents=True, exist_ok=True)
-    SCANX_DIR.mkdir(parents=True, exist_ok=True)
+    # Ensure the active storage cache/directories exist.
+    ensure_storage_dirs()
+
+    if not file_exists(scanx_file):
+        raise FileNotFoundError(f"ScanX file not found: {scanx_file}")
 
     for file_path in screener_files:
-        if not file_path.exists():
+        if not file_exists(file_path):
             raise FileNotFoundError(f"Screener file not found: {file_path}")
 
     level_1 = run_level_1(

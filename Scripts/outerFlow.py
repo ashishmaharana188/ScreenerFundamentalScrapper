@@ -34,7 +34,16 @@ from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
-
+from storage import (
+    SESSION_DIR,
+    GROUPS_DIR,
+    read_text,
+    write_text,
+    file_exists,
+    list_files,
+    delete_file,
+    upload_file,
+)
 from innerFlow import scrape_screen
 
 
@@ -48,27 +57,10 @@ LOGIN_URL = f"{BASE_URL}/login/"
 
 EXPLORE_URL = f"{BASE_URL}/explore/"
 
-# Use centralized storage when available. Fall back to APP_STORAGE_ROOT
-# or the project root so this module also works when run directly.
-try:
-    from storage import GROUPS_DIR as STORAGE_GROUPS_DIR
-    from storage import SESSION_DIR as STORAGE_SESSION_DIR
-except ImportError:
-    MODULE_DIR = Path(__file__).resolve().parent
-    PROJECT_ROOT = (
-        MODULE_DIR.parent
-        if MODULE_DIR.name.casefold() == "scripts"
-        else MODULE_DIR
-    )
-    STORAGE_ROOT = Path(
-        os.getenv("APP_STORAGE_ROOT", str(PROJECT_ROOT))
-    ).expanduser().resolve()
-    STORAGE_SESSION_DIR = STORAGE_ROOT / "session"
-    STORAGE_GROUPS_DIR = STORAGE_ROOT / "screener_data" / "groups"
-
-SESSION_DIR = Path(STORAGE_SESSION_DIR)
-
-GROUPS_DIR = Path(STORAGE_GROUPS_DIR)
+# storage.py is the single source of truth for application storage.
+# It supports both local filesystem storage and Supabase Storage.
+SESSION_DIR = Path(SESSION_DIR)
+GROUPS_DIR = Path(GROUPS_DIR)
 
 
 # ============================================================
@@ -132,16 +124,17 @@ def _session_file_for_email(email: str | None) -> Path:
 
 
 def _read_session_payload(session_file: Path) -> dict:
-    """Read one user's saved session payload."""
-
-    if not session_file.exists():
+    if not file_exists(session_file):
         return {}
 
     try:
-        with open(session_file, "r", encoding="utf-8") as file:
-            payload = json.load(file)
+        payload = json.loads(
+            read_text(session_file)
+        )
     except Exception as exc:
-        print(f"Could not read saved Screener session: {exc}")
+        print(
+            f"Could not read saved Screener session: {exc}"
+        )
         return {}
 
     return payload if isinstance(payload, dict) else {}
@@ -169,11 +162,14 @@ def save_session(session, email: str, session_id: str | None = None) -> str:
         "cookies": cookies,
     }
 
-    temp_file = session_file.with_suffix(".tmp")
-    with open(temp_file, "w", encoding="utf-8") as file:
-        json.dump(payload, file, indent=2)
+    write_text(
+        session_file,
+        json.dumps(
+            payload,
+            indent=2,
+        ),
+    )
 
-    temp_file.replace(session_file)
     return stable_session_id
 
 
@@ -210,7 +206,7 @@ def get_saved_session_info(email: str | None = None) -> dict:
     payload = _read_session_payload(session_file)
 
     return {
-        "exists": session_file.exists(),
+        "exists": file_exists(session_file),
         "saved_at": str(payload.get("saved_at") or "").strip(),
         "last_validated_at": str(
             payload.get("last_validated_at") or ""
@@ -223,10 +219,13 @@ def get_identity_for_session_id(session_id: str | None) -> dict:
     """Resolve an opaque browser session id to its saved Screener identity."""
 
     target = str(session_id or "").strip()
-    if not target or not SESSION_DIR.exists():
+    if not target:
         return {}
 
-    for session_file in SESSION_DIR.glob("screener_*.json"):
+    for session_file in list_files(
+        SESSION_DIR,
+        "screener_*.json",
+    ):
         payload = _read_session_payload(session_file)
         if str(payload.get("session_id") or "").strip() != target:
             continue
@@ -250,8 +249,8 @@ def clear_saved_session(email: str | None = None) -> None:
     session_file = _session_file_for_email(email)
 
     try:
-        session_file.unlink(missing_ok=True)
-    except OSError as exc:
+        delete_file(session_file)
+    except Exception as exc:
         raise RuntimeError(
             f"Could not clear Screener session: {exc}"
         ) from exc
@@ -1388,6 +1387,7 @@ def save_results_csv(
                 ["company_id"]
             )
 
+        upload_file(output_file)
         return output_file
 
     headers = []
@@ -1421,6 +1421,8 @@ def save_results_csv(
             rows
         )
 
+    upload_file(output_file)
+
     print(
         f"Saved {len(rows)} rows:"
     )
@@ -1442,6 +1444,7 @@ def run_selection(
     mode,
     email: str | None = None,
     password: str | None = None,
+    session_id: str | None = None,
 ):
     """
     Run the selected screens.
@@ -1524,6 +1527,7 @@ def run_selection(
             session,
             email=email,
             password=password,
+            session_id=session_id,
         )
 
         for screen in selected_screens:
