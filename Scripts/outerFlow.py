@@ -622,28 +622,50 @@ def build_screen_groups(
     screens,
 ):
     """
-    Automatically build screen groups.
+    Automatically build the hierarchy:
 
-    Grouping:
-        Screens whose leading title identity is the same
-        belong to the same group.
+        GROUP
+            -> SUBGROUP
+                -> ITEM
+
+    GROUP:
+        Determined from the shared leading title identity.
+
+    SUBGROUP:
+        Screens with the same complete normalized title.
+
+    ITEM:
+        The individual screen metadata belonging to that subgroup.
+        The description is the item-level label shown to the user.
 
     PACK:
-        All screens in a group have the same description.
+        A top-level group is a PACK when every screen in the
+        group has the same non-empty description.
 
     NORMAL:
-        Descriptions differ.
+        A top-level group has differing descriptions.
 
     SINGLE:
-        Only one screen has that title identity.
+        A top-level group contains only one screen.
+
+    The original flat ``screens`` list is deliberately retained
+    on every group and subgroup so existing execution code remains
+    compatible while the dashboard can use the hierarchy.
     """
 
-    grouped = defaultdict(
-        list
-    )
+    grouped = defaultdict(list)
 
     # --------------------------------------------------------
-    # Group by leading title identity
+    # TOP-LEVEL GROUP
+    # --------------------------------------------------------
+    # Keep the existing leading-title grouping logic.
+    #
+    # QUALITY CAPITAL AND INFRASTRUCTURE INTENSIVE -> quality
+    # QUALITY FINANCE                              -> quality
+    # QUALITY NON FINANCE                          -> quality
+    #
+    # VALUATION FINANCE                            -> valuation
+    # VALUATION NON FINANCE                        -> valuation
     # --------------------------------------------------------
 
     for screen in screens:
@@ -665,6 +687,100 @@ def build_screen_groups(
     for group_key, group_screens in (
         grouped.items()
     ):
+
+        # ----------------------------------------------------
+        # SUBGROUP
+        # ----------------------------------------------------
+        # A subgroup is the actual distinct screen title.
+        #
+        # Example:
+        #
+        # QUALITY
+        #   ├── QUALITY CAPITAL AND INFRASTRUCTURE INTENSIVE
+        #   ├── QUALITY FINANCE
+        #   └── QUALITY NON FINANCE
+        #
+        # Each subgroup then contains its item(s).
+        # ----------------------------------------------------
+
+        subgrouped = defaultdict(list)
+
+        for screen in group_screens:
+
+            subgroup_key = normalize_text(
+                screen["title"]
+            )
+
+            subgrouped[
+                subgroup_key
+            ].append(
+                screen
+            )
+
+        subgroups = []
+
+        for (
+            subgroup_key,
+            subgroup_screens,
+        ) in subgrouped.items():
+
+            subgroup_descriptions = [
+                normalize_text(
+                    screen["description"]
+                )
+                for screen in subgroup_screens
+            ]
+
+            non_empty_subgroup_descriptions = [
+                description
+                for description in subgroup_descriptions
+                if description
+            ]
+
+            unique_subgroup_descriptions = set(
+                non_empty_subgroup_descriptions
+            )
+
+            # A subgroup is a pack only when its own
+            # items all carry the same non-empty description.
+            if (
+                len(subgroup_screens) > 1
+                and
+                len(non_empty_subgroup_descriptions)
+                == len(subgroup_screens)
+                and
+                len(unique_subgroup_descriptions)
+                == 1
+            ):
+
+                subgroup_type = "pack"
+
+            elif len(subgroup_screens) == 1:
+
+                subgroup_type = "single"
+
+            else:
+
+                subgroup_type = "normal"
+
+            subgroups.append(
+                {
+                    "name": subgroup_screens[0]["title"],
+                    "key": subgroup_key,
+                    "type": subgroup_type,
+                    "screens": subgroup_screens,
+                    "items": subgroup_screens,
+                }
+            )
+
+        subgroups.sort(
+            key=lambda subgroup:
+            subgroup["name"].casefold()
+        )
+
+        # ----------------------------------------------------
+        # TOP-LEVEL GROUP TYPE
+        # ----------------------------------------------------
 
         descriptions = [
             normalize_text(
@@ -690,7 +806,8 @@ def build_screen_groups(
         elif (
             len(non_empty_descriptions)
             == len(group_screens)
-            and len(unique_descriptions)
+            and
+            len(unique_descriptions)
             == 1
         ):
 
@@ -705,7 +822,12 @@ def build_screen_groups(
         ] = {
             "name": group_key,
             "type": group_type,
+
+            # Existing execution compatibility.
             "screens": group_screens,
+
+            # New hierarchy.
+            "subgroups": subgroups,
         }
 
     return dict(
@@ -756,6 +878,38 @@ def make_group_label(
     return (
         f"{group['name'].upper()} "
         f"({group['type'].upper()})"
+    )
+
+
+def make_subgroup_label(
+    subgroup,
+):
+    """
+    Display the subgroup title.
+
+    The subgroup is the actual distinct screen title.
+    """
+
+    return subgroup[
+        "name"
+    ]
+
+
+def make_item_label(
+    item,
+):
+    """
+    Display one item belonging to a subgroup.
+
+    Item display is:
+        TITLE | DESCRIPTION
+
+    This keeps the actual screen metadata visible rather than
+    inventing another naming layer.
+    """
+
+    return make_screen_label(
+        item
     )
 
 

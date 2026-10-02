@@ -387,9 +387,6 @@ def build_query(
     if not industries:
         raise ValueError("Select at least one industry.")
 
-    if not sectors:
-        raise ValueError("Select at least one sector.")
-
     invalid_industries = [
         value for value in industries if value not in ALL_INDUSTRIES
     ]
@@ -407,16 +404,27 @@ def build_query(
             f"Unknown ScanX sectors: {invalid_sectors}"
         )
 
-    return {
-        "logic_op": "AND",
-        "params": [
-            {
-                "field": "Exch",
-                "op": "eq",
-                "val": "NSE",
-            },
-            make_or_params("Sector", industries),
-            make_or_params("SubSector", sectors),
+    params = [
+        {
+            "field": "Exch",
+            "op": "eq",
+            "val": "NSE",
+        },
+        # ScanX calls the industry dimension "Sector".
+        make_or_params("Sector", industries),
+    ]
+
+    # ScanX calls the user-facing sector dimension "SubSector".
+    # It is optional. When no sectors are selected, do not add a
+    # restrictive SubSector filter, which means all subsectors under
+    # the selected industries are returned.
+    if sectors:
+        params.append(
+            make_or_params("SubSector", sectors)
+        )
+
+    params.extend(
+        [
             {
                 "field": "OgInst",
                 "op": "eq",
@@ -427,7 +435,12 @@ def build_query(
                 "op": "gte",
                 "val": "0",
             },
-        ],
+        ]
+    )
+
+    return {
+        "logic_op": "AND",
+        "params": params,
     }
 
 
