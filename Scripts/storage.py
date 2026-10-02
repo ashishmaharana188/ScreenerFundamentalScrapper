@@ -23,7 +23,6 @@ normal Path objects while storage.py handles persistence.
 from __future__ import annotations
 
 import os
-import shutil
 from pathlib import Path
 from typing import BinaryIO
 
@@ -157,19 +156,27 @@ def ensure_storage_dirs() -> None:
 # PATH HELPERS
 # ============================================================
 
-def storage_path(*parts: str | os.PathLike[str]) -> Path:
+def storage_path(
+    *parts: str | os.PathLike[str],
+) -> Path:
     return STORAGE_ROOT.joinpath(*parts)
 
 
-def data_path(*parts: str | os.PathLike[str]) -> Path:
+def data_path(
+    *parts: str | os.PathLike[str],
+) -> Path:
     return BASE_DATA_DIR.joinpath(*parts)
 
 
-def scanx_path(*parts: str | os.PathLike[str]) -> Path:
+def scanx_path(
+    *parts: str | os.PathLike[str],
+) -> Path:
     return SCANX_DIR.joinpath(*parts)
 
 
-def session_path(*parts: str | os.PathLike[str]) -> Path:
+def session_path(
+    *parts: str | os.PathLike[str],
+) -> Path:
     return SESSION_DIR.joinpath(*parts)
 
 
@@ -191,7 +198,9 @@ def ensure_parent(
 # SUPABASE PATH MAPPING
 # ============================================================
 
-def _remote_key(path: str | os.PathLike[str]) -> str:
+def _remote_key(
+    path: str | os.PathLike[str],
+) -> str:
     """
     Convert a local application path into a Supabase object path.
 
@@ -262,6 +271,16 @@ def _download_remote_file(
 def upload_file(
     path: str | os.PathLike[str],
 ) -> Path:
+    """
+    Upload a local file to Supabase Storage.
+
+    LOCAL
+        Does nothing and returns the local Path.
+
+    SUPABASE
+        Uploads the file to the configured private bucket and
+        uses the path relative to STORAGE_ROOT as the object key.
+    """
 
     path = Path(path)
 
@@ -274,27 +293,74 @@ def upload_file(
         )
 
     remote_key = _remote_key(path)
-
     client = _get_supabase()
 
     try:
         with path.open("rb") as file:
-            client.storage.from_(
-                SUPABASE_BUCKET
-            ).upload(
+            client.storage.from_(SUPABASE_BUCKET).upload(
                 remote_key,
                 file,
-                file_options={
-                    "upsert": "true",
-                },
+                file_options={"upsert": "true"},
             )
     except Exception as exc:
         raise RuntimeError(
-            f"Could not upload file to Supabase: "
-            f"{remote_key}"
+            f"Could not upload file to Supabase: {remote_key}"
         ) from exc
 
     return path
+
+
+# ============================================================
+# DELETE FILE
+# ============================================================
+
+def delete_file(
+    path: str | os.PathLike[str],
+) -> None:
+    """
+    Delete a file from the active storage backend.
+
+    LOCAL
+        Removes the local file.
+
+    SUPABASE
+        Removes the remote object and the local cached copy.
+    """
+
+    path = Path(path)
+
+    # Local backend
+    if STORAGE_BACKEND != "supabase":
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            raise RuntimeError(
+                f"Could not delete local file: {path}"
+            ) from exc
+
+        return
+
+    # Supabase backend
+    remote_key = _remote_key(path)
+    client = _get_supabase()
+
+    try:
+        client.storage.from_(SUPABASE_BUCKET).remove(
+            [remote_key]
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"Could not delete Supabase file: {remote_key}"
+        ) from exc
+
+    # Remove local cache after remote deletion succeeds.
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        raise RuntimeError(
+            f"Supabase file was deleted, but local cache could not "
+            f"be removed: {path}"
+        ) from exc
 
 
 # ============================================================
@@ -441,7 +507,7 @@ def read_text(
         _download_remote_file(path)
 
     return path.read_text(
-        encoding=encoding
+        encoding=encoding,
     )
 
 
@@ -521,8 +587,6 @@ ensure_storage_dirs()
 
 
 __all__ = [
-    "MODULE_DIR",
-    "PROJECT_ROOT",
     "STORAGE_BACKEND",
     "STORAGE_ROOT",
     "BASE_DATA_DIR",
@@ -531,8 +595,6 @@ __all__ = [
     "COMPARISON_DIR",
     "SCANX_DIR",
     "SESSION_DIR",
-    "SUPABASE_URL",
-    "SUPABASE_BUCKET",
     "ensure_storage_dirs",
     "storage_path",
     "data_path",
@@ -547,4 +609,5 @@ __all__ = [
     "write_bytes",
     "open_file",
     "upload_file",
+    "delete_file",
 ]
