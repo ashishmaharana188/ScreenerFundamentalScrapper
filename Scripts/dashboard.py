@@ -10,7 +10,9 @@ Workflow:
 The backend modules remain responsible for scraping, grouping, comparison,
 authentication, and file creation. This module is the presentation layer.
 """
-
+print("========================================", flush=True)
+print("DASHBOARD.PY STARTED", flush=True)
+print("========================================", flush=True)
 from __future__ import annotations
 
 from pathlib import Path
