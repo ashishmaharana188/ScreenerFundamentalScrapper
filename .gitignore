@@ -1,3 +1,5 @@
 /screener_data
 /scanx_data
 __pycache__
+session/screener_session.json
+session

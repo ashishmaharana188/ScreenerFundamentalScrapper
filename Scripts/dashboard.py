@@ -511,6 +511,41 @@ st.markdown(
     }
 
     /* ============================================================
+       SCREENER CONNECTION STATUS
+       ============================================================ */
+
+    .connection-row {
+        display: flex;
+        align-items: center;
+        gap: 0.52rem;
+        min-height: 2.2rem;
+        margin: 0.35rem 0 0.65rem 0;
+    }
+
+    .connection-dot {
+        width: 0.62rem;
+        height: 0.62rem;
+        flex: 0 0 0.62rem;
+        border-radius: 50%;
+        border: 1px solid var(--fg);
+        background: var(--fg);
+    }
+
+    .connection-dot.offline {
+        background: transparent;
+    }
+
+    .connection-main {
+        display: flex;
+        align-items: baseline;
+        flex-wrap: wrap;
+        gap: 0.42rem;
+        color: var(--fg);
+        font-size: 0.78rem;
+        font-weight: 800;
+    }
+
+    /* ============================================================
        RESPONSIVE
        ============================================================ */
 
@@ -597,6 +632,10 @@ st.markdown(
 DEFAULT_STATE = {
     "screener_screens": [],
     "screener_groups": {},
+    "screener_connected": False,
+    "screener_active_email": "",
+    "screener_session_id": "",
+    "screener_show_login": False,
     "last_scanx_names": [],
     "last_result_file": None,
     "last_result_title": None,
@@ -606,6 +645,47 @@ DEFAULT_STATE = {
 
 for key, value in DEFAULT_STATE.items():
     st.session_state.setdefault(key, value)
+
+
+def _clear_screener_query_session() -> None:
+    """Remove the browser-persisted Screener session identifier."""
+
+    if "screener_session" in st.query_params:
+        del st.query_params["screener_session"]
+
+
+# Restore the active account after a browser reload. Only an opaque
+# session id is kept in the browser URL, never the email or password.
+if not st.session_state.get("screener_session_id"):
+    persisted_session_id = str(
+        st.query_params.get("screener_session", "")
+    ).strip()
+
+    if persisted_session_id:
+        try:
+            identity = outerFlow.get_identity_for_session_id(
+                persisted_session_id
+            )
+            restored_email = str(identity.get("email") or "").strip()
+
+            if restored_email:
+                status = outerFlow.get_screener_status(
+                    email=restored_email,
+                    session_id=persisted_session_id,
+                )
+
+                if status.get("connected"):
+                    st.session_state["screener_email"] = restored_email
+                    st.session_state["screener_active_email"] = restored_email
+                    st.session_state["screener_session_id"] = str(
+                        status.get("session_id") or persisted_session_id
+                    )
+                    st.session_state["screener_connected"] = True
+                    st.session_state["screener_show_login"] = False
+                else:
+                    _clear_screener_query_session()
+        except Exception:
+            _clear_screener_query_session()
 
 
 # ============================================================
@@ -964,16 +1044,155 @@ if scanx_run:
 # ============================================================
 # STEP 2: SCREENER
 # ============================================================
+
+current_screener_email = str(
+    st.session_state.get("screener_active_email", "")
+).strip().casefold()
+
+connection_active = bool(
+    st.session_state.get("screener_connected")
+    and current_screener_email
+    and st.session_state.get("screener_session_id")
+)
+
+screener_state_label = (
+    "● CONNECTED"
+    if connection_active
+    else "○ OFFLINE"
+)
+
 _section_header(
     "2",
     "Run Screener screens",
-    "Screens are discovered automatically from Your screens and grouped by leading title identity.",
-    (
-        f"{group_count:,} groups loaded"
-        if group_count
-        else "Screens not loaded"
-    ),
+    "Connect with your own Screener account. Each account gets its own saved session.",
+    screener_state_label,
 )
+
+# --------------------------------------------------------
+# SCREENER CONNECTION
+# --------------------------------------------------------
+
+connection_col1, connection_col2 = st.columns([1, 2], gap="large")
+
+with connection_col1:
+    status_class = (
+        "connection-dot"
+        if connection_active
+        else "connection-dot offline"
+    )
+    status_text = "Connected" if connection_active else "Offline"
+
+    st.markdown(
+        f"""<div class=\"connection-row\">
+            <span class=\"{status_class}\"></span>
+            <span class=\"connection-main\">
+                <span>{status_text}</span>
+            </span>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
+with connection_col2:
+    st.caption(
+        "Saved sessions are reused automatically. Passwords are never written to disk."
+    )
+
+if connection_active and not st.session_state.get("screener_show_login"):
+    action_col1, action_col2 = st.columns([0.8, 0.8], gap="large")
+
+    with action_col1:
+        change_account = st.button(
+            "Change Account",
+            use_container_width=False,
+            key="change_screener_account",
+        )
+
+    with action_col2:
+        clear_session = st.button(
+            "Clear Session",
+            use_container_width=False,
+            key="clear_screener_session_connected",
+        )
+
+    if change_account:
+        st.session_state["screener_show_login"] = True
+        st.rerun()
+
+    if clear_session:
+        try:
+            outerFlow.clear_saved_session(
+                email=st.session_state.get("screener_active_email")
+            )
+            st.session_state["screener_connected"] = False
+            st.session_state["screener_active_email"] = ""
+            st.session_state["screener_session_id"] = ""
+            st.session_state["screener_show_login"] = False
+            st.session_state["screener_screens"] = []
+            st.session_state["screener_groups"] = {}
+            _clear_screener_query_session()
+            st.success("Saved Screener session cleared.")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Could not clear Screener session: {exc}")
+
+else:
+    login_col1, login_col2, login_col3 = st.columns([1.15, 1.15, 0.8], gap="large")
+
+    with login_col1:
+        screener_email = st.text_input(
+            "Screener email",
+            key="screener_email",
+            placeholder="name@example.com",
+        )
+
+    with login_col2:
+        screener_password = st.text_input(
+            "Screener password",
+            type="password",
+            key="screener_password",
+            placeholder="Password",
+        )
+
+    with login_col3:
+        connect_button_label = (
+            "Reconnect"
+            if st.session_state.get("screener_show_login")
+            else "Connect Screener"
+        )
+        connect_screener = st.button(
+            connect_button_label,
+            type="primary",
+            use_container_width=False,
+            key="connect_screener",
+        )
+
+    if connect_screener:
+        try:
+            with st.spinner("Connecting to Screener..."):
+                connection_result = outerFlow.connect_screener(
+                    email=screener_email,
+                    password=screener_password,
+                    force_login=True,
+                )
+
+            session_id = str(connection_result.get("session_id") or "").strip()
+            active_email = screener_email.strip().casefold()
+
+            if not session_id:
+                raise RuntimeError(
+                    "Screener connected but no session identifier was created."
+                )
+
+            st.session_state["screener_connected"] = True
+            st.session_state["screener_active_email"] = active_email
+            st.session_state["screener_session_id"] = session_id
+            st.session_state["screener_show_login"] = False
+            st.query_params["screener_session"] = session_id
+            st.success("Screener connected.")
+            st.rerun()
+        except Exception as exc:
+            st.session_state["screener_connected"] = False
+            st.error(f"Screener connection failed: {exc}")
 
 load_col, status_col = st.columns([1, 2], gap="large")
 
@@ -981,6 +1200,7 @@ with load_col:
     load_screens = st.button(
         "Discover Screener Screens",
         use_container_width=False,
+        disabled=not connection_active,
         key="discover_screener",
     )
 
@@ -990,15 +1210,18 @@ with status_col:
             f"{screen_count:,} screens discovered across "
             f"{group_count:,} groups."
         )
+    elif not connection_active:
+        st.caption("Connect to Screener before discovering screens.")
     else:
-        st.caption(
-            "Discovery uses your authenticated Screener session."
-        )
+        st.caption("Discovery uses the saved authenticated session for this account.")
 
 if load_screens:
     try:
         with st.spinner("Discovering Screener screens..."):
-            discovered_screens = outerFlow.discover_custom_screens()
+            discovered_screens = outerFlow.discover_custom_screens(
+                email=st.session_state.get("screener_active_email"),
+                session_id=st.session_state.get("screener_session_id"),
+            )
 
         discovered_groups = outerFlow.build_screen_groups(
             discovered_screens
@@ -1081,6 +1304,7 @@ if screener_groups:
                         group=selected_group,
                         selected_screens=selected_group["screens"],
                         mode="merge",
+                        email=st.session_state.get("screener_active_email"),
                     )
 
                 st.success(
@@ -1256,6 +1480,7 @@ if screener_groups:
                             group=selected_group,
                             selected_screens=selected_screens,
                             mode=mode.lower(),
+                            email=st.session_state.get("screener_active_email"),
                         )
 
                     st.success(
@@ -1311,6 +1536,7 @@ if screener_groups:
                             group=selected_group,
                             selected_screens=[screen],
                             mode="single",
+                            email=st.session_state.get("screener_active_email"),
                         )
 
                     st.success(

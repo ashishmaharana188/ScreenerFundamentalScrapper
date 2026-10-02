@@ -24,10 +24,11 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
 import re
+import secrets
 import time
 from collections import Counter, defaultdict
-from getpass import getpass
 from pathlib import Path
 from urllib.parse import urljoin
 
@@ -47,27 +48,44 @@ LOGIN_URL = f"{BASE_URL}/login/"
 
 EXPLORE_URL = f"{BASE_URL}/explore/"
 
-SESSION_FILE = Path(
-    "screener_session.json"
-)
+# Use centralized storage when available. Fall back to APP_STORAGE_ROOT
+# or the project root so this module also works when run directly.
+try:
+    from storage import GROUPS_DIR as STORAGE_GROUPS_DIR
+    from storage import SESSION_DIR as STORAGE_SESSION_DIR
+except ImportError:
+    MODULE_DIR = Path(__file__).resolve().parent
+    PROJECT_ROOT = (
+        MODULE_DIR.parent
+        if MODULE_DIR.name.casefold() == "scripts"
+        else MODULE_DIR
+    )
+    STORAGE_ROOT = Path(
+        os.getenv("APP_STORAGE_ROOT", str(PROJECT_ROOT))
+    ).expanduser().resolve()
+    STORAGE_SESSION_DIR = STORAGE_ROOT / "session"
+    STORAGE_GROUPS_DIR = STORAGE_ROOT / "screener_data" / "groups"
 
-BASE_DATA_DIR = Path(
-    "screener_data"
-)
+SESSION_DIR = Path(STORAGE_SESSION_DIR)
 
-GROUPS_DIR = (
-    BASE_DATA_DIR / "groups"
-)
+GROUPS_DIR = Path(STORAGE_GROUPS_DIR)
 
 
 # ============================================================
 # SESSION
 # ============================================================
 
+
+def _utc_now() -> str:
+    """Return a compact UTC timestamp for session metadata."""
+
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
 def create_screener_session():
-    """
-    Create one HTTP session for the complete Screener run.
-    """
+    """Create one HTTP session for the complete Screener operation."""
 
     session = requests.Session()
 
@@ -84,9 +102,7 @@ def create_screener_session():
                 "application/xml;q=0.9,image/avif,image/webp,"
                 "*/*;q=0.8"
             ),
-            "Accept-Language": (
-                "en-US,en;q=0.9"
-            ),
+            "Accept-Language": "en-US,en;q=0.9",
         }
     )
 
@@ -97,92 +113,204 @@ def create_screener_session():
 # SESSION PERSISTENCE
 # ============================================================
 
-def save_session(session):
-    """
-    Save Screener cookies.
 
-    Password is never stored.
-    """
+def _normalize_identity(email: str | None) -> str:
+    """Normalize a Screener login identity for stable session lookup."""
 
-    cookies = (
-        requests.utils
-        .dict_from_cookiejar(
-            session.cookies
-        )
-    )
-
-    with open(
-        SESSION_FILE,
-        "w",
-        encoding="utf-8",
-    ) as file:
-
-        json.dump(
-            cookies,
-            file,
-            indent=2,
-        )
+    return str(email or "").strip().casefold()
 
 
-def load_saved_session(session):
-    """
-    Load saved Screener cookies.
+def _session_file_for_email(email: str | None) -> Path:
+    """Return a user-scoped session path without exposing the email."""
 
-    Returns:
-        True  -> loaded
-        False -> unavailable/invalid file
-    """
+    identity = _normalize_identity(email)
+    if not identity:
+        raise ValueError("A Screener email is required to access its session.")
 
-    if not SESSION_FILE.exists():
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    return SESSION_DIR / f"screener_{digest}.json"
 
+
+def _read_session_payload(session_file: Path) -> dict:
+    """Read one user's saved session payload."""
+
+    if not session_file.exists():
+        return {}
+
+    try:
+        with open(session_file, "r", encoding="utf-8") as file:
+            payload = json.load(file)
+    except Exception as exc:
+        print(f"Could not read saved Screener session: {exc}")
+        return {}
+
+    return payload if isinstance(payload, dict) else {}
+
+
+def save_session(session, email: str, session_id: str | None = None) -> str:
+    """Persist authenticated cookies for exactly one Screener account."""
+
+    session_file = _session_file_for_email(email)
+    SESSION_DIR.mkdir(parents=True, exist_ok=True)
+
+    existing = _read_session_payload(session_file)
+    cookies = requests.utils.dict_from_cookiejar(session.cookies)
+    stable_session_id = str(
+        session_id
+        or existing.get("session_id")
+        or secrets.token_urlsafe(32)
+    ).strip()
+
+    payload = {
+        "session_id": stable_session_id,
+        "email": _normalize_identity(email),
+        "saved_at": existing.get("saved_at") or _utc_now(),
+        "last_validated_at": _utc_now(),
+        "cookies": cookies,
+    }
+
+    temp_file = session_file.with_suffix(".tmp")
+    with open(temp_file, "w", encoding="utf-8") as file:
+        json.dump(payload, file, indent=2)
+
+    temp_file.replace(session_file)
+    return stable_session_id
+
+
+def load_saved_session(session, email: str) -> bool:
+    """Load the saved cookies belonging to the supplied Screener account."""
+
+    session_file = _session_file_for_email(email)
+    payload = _read_session_payload(session_file)
+    cookies = payload.get("cookies")
+
+    if not isinstance(cookies, dict) or not cookies:
         return False
 
     try:
-
-        with open(
-            SESSION_FILE,
-            "r",
-            encoding="utf-8",
-        ) as file:
-
-            cookies = json.load(
-                file
-            )
-
-        session.cookies = (
-            requests.utils
-            .cookiejar_from_dict(
-                cookies
-            )
-        )
-
+        session.cookies = requests.utils.cookiejar_from_dict(cookies)
         return True
-
     except Exception as exc:
-
-        print(
-            f"Could not load saved session: {exc}"
-        )
-
+        print(f"Could not load saved session cookies: {exc}")
         return False
+
+
+def get_saved_session_info(email: str | None = None) -> dict:
+    """Return safe metadata for one user's persisted session."""
+
+    if not _normalize_identity(email):
+        return {
+            "exists": False,
+            "saved_at": "",
+            "last_validated_at": "",
+            "file": "",
+        }
+
+    session_file = _session_file_for_email(email)
+    payload = _read_session_payload(session_file)
+
+    return {
+        "exists": session_file.exists(),
+        "saved_at": str(payload.get("saved_at") or "").strip(),
+        "last_validated_at": str(
+            payload.get("last_validated_at") or ""
+        ).strip(),
+        "file": str(session_file),
+    }
+
+
+def get_identity_for_session_id(session_id: str | None) -> dict:
+    """Resolve an opaque browser session id to its saved Screener identity."""
+
+    target = str(session_id or "").strip()
+    if not target or not SESSION_DIR.exists():
+        return {}
+
+    for session_file in SESSION_DIR.glob("screener_*.json"):
+        payload = _read_session_payload(session_file)
+        if str(payload.get("session_id") or "").strip() != target:
+            continue
+
+        email = _normalize_identity(payload.get("email"))
+        if not email:
+            continue
+
+        return {
+            "email": email,
+            "session_id": target,
+            "file": str(session_file),
+        }
+
+    return {}
+
+
+def clear_saved_session(email: str | None = None) -> None:
+    """Remove only the persisted session for the supplied account."""
+
+    session_file = _session_file_for_email(email)
+
+    try:
+        session_file.unlink(missing_ok=True)
+    except OSError as exc:
+        raise RuntimeError(
+            f"Could not clear Screener session: {exc}"
+        ) from exc
 
 
 # ============================================================
 # AUTHENTICATION
 # ============================================================
 
-def is_authenticated(session):
-    """
-    Check the authenticated Explore page.
-    """
+
+def _resolve_email(
+    email: str | None = None,
+    session_id: str | None = None,
+) -> str:
+    """Resolve the Screener identity from email, session id, or environment."""
+
+    resolved_email = str(email or "").strip()
+
+    if not resolved_email and session_id:
+        identity = get_identity_for_session_id(session_id)
+        resolved_email = str(identity.get("email") or "").strip()
+
+    if not resolved_email:
+        resolved_email = os.getenv("SCREENER_EMAIL", "").strip()
+
+    return resolved_email
+
+
+def _resolve_credentials(
+    email: str | None = None,
+    password: str | None = None,
+) -> tuple[str, str]:
+    """Resolve credentials only when a fresh login is required."""
+
+    resolved_email = _resolve_email(email)
+    resolved_password = (
+        password
+        if password is not None
+        else os.getenv("SCREENER_PASSWORD", "")
+    )
+
+    if not str(resolved_password):
+        raise RuntimeError(
+            "Screener credentials are required for a fresh login. "
+            "Enter the email and password in the dashboard, or configure "
+            "SCREENER_EMAIL and SCREENER_PASSWORD."
+        )
+
+    return resolved_email, str(resolved_password)
+
+
+def is_authenticated(session) -> bool:
+    """Check the authenticated Explore page."""
 
     try:
-
         response = session.get(
             EXPLORE_URL,
             timeout=30,
         )
-
         response.raise_for_status()
 
         soup = BeautifulSoup(
@@ -190,51 +318,33 @@ def is_authenticated(session):
             "html.parser",
         )
 
-        for heading in soup.select(
-            "h2.h3"
-        ):
-
-            text = heading.get_text(
-                " ",
-                strip=True,
-            )
-
-            if (
-                text.casefold()
-                == "your screens"
-            ):
-
+        for heading in soup.select("h2.h3"):
+            text = heading.get_text(" ", strip=True)
+            if text.casefold() == "your screens":
                 return True
 
         return False
 
     except requests.RequestException:
-
         return False
 
 
-def perform_login(session):
-    """
-    Perform fresh Screener login.
-    """
+def perform_login(
+    session,
+    email: str | None = None,
+    password: str | None = None,
+) -> None:
+    """Perform a fresh Screener login using supplied or environment credentials."""
 
-    print(
-        "\n========================================"
-    )
-
-    print(
-        "FRESH SCREENER LOGIN"
-    )
-
-    print(
-        "========================================"
+    resolved_email, resolved_password = _resolve_credentials(
+        email=email,
+        password=password,
     )
 
     login_response = session.get(
         LOGIN_URL,
         timeout=30,
     )
-
     login_response.raise_for_status()
 
     login_soup = BeautifulSoup(
@@ -242,56 +352,33 @@ def perform_login(session):
         "html.parser",
     )
 
-    csrf_input = (
-        login_soup.select_one(
-            'input[name="csrfmiddlewaretoken"]'
-        )
+    csrf_input = login_soup.select_one(
+        'input[name="csrfmiddlewaretoken"]'
     )
 
     if csrf_input is None:
-
         raise RuntimeError(
-            "Could not find csrfmiddlewaretoken "
-            "on Screener login page."
+            "Could not find csrfmiddlewaretoken on Screener login page."
         )
 
-    csrf_token = csrf_input.get(
-        "value"
-    )
+    csrf_token = csrf_input.get("value")
 
     if not csrf_token:
-
         raise RuntimeError(
             "Screener returned an empty CSRF token."
         )
 
-    email = input(
-        "\nScreener email: "
-    ).strip()
-
-    password = getpass(
-        "Screener password: "
-    )
-
-    if not email or not password:
-
-        raise RuntimeError(
-            "Email and password are required."
-        )
-
     login_data = {
         "csrfmiddlewaretoken": csrf_token,
-        "username": email,
-        "password": password,
+        "username": resolved_email,
+        "password": resolved_password,
         "next": "/explore/",
     }
 
     login_headers = {
         "Referer": LOGIN_URL,
         "Origin": BASE_URL,
-        "Content-Type": (
-            "application/x-www-form-urlencoded"
-        ),
+        "Content-Type": "application/x-www-form-urlencoded",
     }
 
     login_response = session.post(
@@ -301,49 +388,146 @@ def perform_login(session):
         timeout=30,
         allow_redirects=True,
     )
-
     login_response.raise_for_status()
 
     if not is_authenticated(session):
-
         raise RuntimeError(
-            "Login completed, but Screener did not "
-            "return the authenticated 'Your screens' section."
+            "Login completed, but Screener did not return the authenticated "
+            "'Your screens' section. Check the credentials and account access."
         )
 
     save_session(
-        session
-    )
-
-    print(
-        "Authentication successful."
+        session,
+        email=resolved_email,
     )
 
 
-def authenticate_screener(session):
-    """
-    Reuse saved session when possible.
-    """
+def authenticate_screener(
+    session,
+    email: str | None = None,
+    password: str | None = None,
+    session_id: str | None = None,
+    force_login: bool = False,
+) -> str:
+    """Reuse a saved session by email or opaque session id."""
 
-    if load_saved_session(
-        session
-    ):
+    resolved_email = _resolve_email(
+        email=email,
+        session_id=session_id,
+    )
 
-        if is_authenticated(
-            session
-        ):
+    if not force_login and resolved_email:
+        if load_saved_session(session, resolved_email):
+            if is_authenticated(session):
+                save_session(session, resolved_email)
+                return resolved_email
 
-            print(
-                "Saved Screener session is valid."
-            )
+            session.cookies.clear()
+            clear_saved_session(resolved_email)
 
-            return
-
-        session.cookies.clear()
+    if not resolved_email:
+        raise RuntimeError(
+            "A Screener account is required for a fresh login. "
+            "Enter the email in the dashboard."
+        )
 
     perform_login(
-        session
+        session,
+        email=resolved_email,
+        password=password,
     )
+
+    return resolved_email
+
+
+def get_screener_status(
+    email: str | None = None,
+    session_id: str | None = None,
+) -> dict:
+    """Validate one account's persisted Screener session."""
+
+    resolved_email = _normalize_identity(email)
+
+    if not resolved_email and session_id:
+        identity = get_identity_for_session_id(session_id)
+        resolved_email = _normalize_identity(identity.get("email"))
+
+    if not resolved_email:
+        return {
+            "connected": False,
+            "saved_at": "",
+            "last_validated_at": "",
+            "session_id": "",
+        }
+
+    session = create_screener_session()
+
+    try:
+        info = get_saved_session_info(resolved_email)
+
+        if not info["exists"] or not load_saved_session(session, resolved_email):
+            return {
+                "connected": False,
+                "saved_at": info.get("saved_at", ""),
+                "last_validated_at": info.get("last_validated_at", ""),
+            }
+
+        connected = is_authenticated(session)
+
+        if connected:
+            save_session(session, resolved_email)
+        else:
+            session.cookies.clear()
+            clear_saved_session(resolved_email)
+
+        refreshed = get_saved_session_info(resolved_email)
+
+        payload = _read_session_payload(
+            _session_file_for_email(resolved_email)
+        )
+
+        return {
+            "connected": connected,
+            "saved_at": refreshed.get("saved_at", ""),
+            "last_validated_at": refreshed.get("last_validated_at", ""),
+            "session_id": str(payload.get("session_id") or ""),
+        }
+
+    finally:
+        session.close()
+
+
+def connect_screener(
+    email: str | None = None,
+    password: str | None = None,
+    session_id: str | None = None,
+    force_login: bool = False,
+) -> dict:
+    """Connect one Screener account and persist only its session cookies."""
+
+    session = create_screener_session()
+
+    try:
+        resolved_email = authenticate_screener(
+            session,
+            email=email,
+            password=password,
+            session_id=session_id,
+            force_login=force_login,
+        )
+
+        payload = _read_session_payload(
+            _session_file_for_email(resolved_email)
+        )
+
+        return {
+            "connected": True,
+            "session_file": str(_session_file_for_email(resolved_email)),
+            "session_id": str(payload.get("session_id") or ""),
+        }
+
+    finally:
+        session.close()
 
 
 # ============================================================
@@ -488,27 +672,26 @@ def get_custom_screens(session):
     return screens
 
 
-def discover_custom_screens():
-    """
-    Authenticate and return discovered screens.
-    """
+def discover_custom_screens(
+    email: str | None = None,
+    password: str | None = None,
+    session_id: str | None = None,
+) -> list[dict]:
+    """Authenticate and return discovered custom screens."""
 
-    session = (
-        create_screener_session()
-    )
+    session = create_screener_session()
 
     try:
-
         authenticate_screener(
-            session
+            session,
+            email=email,
+            password=password,
+            session_id=session_id,
         )
 
-        return get_custom_screens(
-            session
-        )
+        return get_custom_screens(session)
 
     finally:
-
         session.close()
 
 
@@ -1257,6 +1440,8 @@ def run_selection(
     group,
     selected_screens,
     mode,
+    email: str | None = None,
+    password: str | None = None,
 ):
     """
     Run the selected screens.
@@ -1336,7 +1521,9 @@ def run_selection(
     try:
 
         authenticate_screener(
-            session
+            session,
+            email=email,
+            password=password,
         )
 
         for screen in selected_screens:
