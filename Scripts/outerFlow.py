@@ -1,4 +1,10 @@
-# outerFlow.py
+"""Screener outer flow.
+
+The dashboard supplies the Screener screen names to scrape.
+There are no hard-coded screen/group names in this module.
+"""
+
+from __future__ import annotations
 
 import json
 import time
@@ -9,49 +15,25 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
-from innerFlow import scrape_screen,save_group_csv
-from logicFlow import run_logic_flow
+from innerFlow import scrape_screen, save_group_csv
+
+
 # ============================================================
 # CONFIGURATION
 # ============================================================
 
 BASE_URL = "https://www.screener.in"
-
 LOGIN_URL = f"{BASE_URL}/login/"
 EXPLORE_URL = f"{BASE_URL}/explore/"
-
 SESSION_FILE = Path("screener_session.json")
-
-#TARGET_GROUPS = [
-#    "Core Business Quality",
-#    "Growth and Earnings Quality",
-#    "Balance Sheet and Cash-Flow Strength",
-#    "Valuation",
-#    "Promoters and Shareholder Structure",
-#]
-
-TARGET_GROUPS = [
-    "Quality Gate",
-    "Under valued",
-    "Over Valued",
-    "Loose check"
-]
 
 
 # ============================================================
-# SCREENER SESSION
+# SESSION
 # ============================================================
 
 def create_screener_session():
-    """
-    Create one requests.Session() for the complete run.
-
-    This SAME session is used for:
-        - authentication
-        - Explore
-        - all five screens
-        - every page handled by innerFlow
-    """
+    """Create one HTTP session for the complete Screener run."""
 
     session = requests.Session()
 
@@ -80,213 +62,90 @@ def create_screener_session():
 # ============================================================
 
 def save_session(session):
-    """
-    Save the current Screener cookies.
+    """Save Screener cookies. The password is never stored."""
 
-    The password is NEVER stored.
-    """
+    cookies = requests.utils.dict_from_cookiejar(session.cookies)
 
-    cookies = requests.utils.dict_from_cookiejar(
-        session.cookies
-    )
+    with open(SESSION_FILE, "w", encoding="utf-8") as file:
+        json.dump(cookies, file, indent=2)
 
-    with open(
-        SESSION_FILE,
-        "w",
-        encoding="utf-8",
-    ) as file:
-
-        json.dump(
-            cookies,
-            file,
-            indent=2,
-        )
-
-    print(
-        f"Screener session saved to: "
-        f"{SESSION_FILE.resolve()}"
-    )
+    print(f"Screener session saved to: {SESSION_FILE.resolve()}")
 
 
 def load_saved_session(session):
-    """
-    Load previously saved Screener cookies.
-
-    Returns:
-        True  -> session file loaded
-        False -> no usable session file
-    """
+    """Load the saved Screener cookies when available."""
 
     if not SESSION_FILE.exists():
-
-        print(
-            "No saved Screener session found."
-        )
-
+        print("No saved Screener session found.")
         return False
 
     try:
-
-        with open(
-            SESSION_FILE,
-            "r",
-            encoding="utf-8",
-        ) as file:
-
+        with open(SESSION_FILE, "r", encoding="utf-8") as file:
             cookies = json.load(file)
 
-        session.cookies = (
-            requests.utils.cookiejar_from_dict(
-                cookies
-            )
-        )
-
-        print(
-            "Saved Screener session loaded."
-        )
-
+        session.cookies = requests.utils.cookiejar_from_dict(cookies)
+        print("Saved Screener session loaded.")
         return True
 
-    except Exception as e:
-
-        print(
-            f"Could not load saved session: {e}"
-        )
-
+    except Exception as exc:
+        print(f"Could not load saved session: {exc}")
         return False
 
 
 # ============================================================
-# AUTHENTICATION CHECK
+# AUTHENTICATION
 # ============================================================
 
 def is_authenticated(session):
-    """
-    Verify that the current session is actually logged in.
-
-    We use the account-specific 'Your screens' section as
-    the authentication check.
-    """
+    """Check whether the current session exposes 'Your screens'."""
 
     try:
-
-        response = session.get(
-            EXPLORE_URL,
-            timeout=30,
-        )
-
+        response = session.get(EXPLORE_URL, timeout=30)
         response.raise_for_status()
 
-        soup = BeautifulSoup(
-            response.text,
-            "html.parser",
-        )
+        soup = BeautifulSoup(response.text, "html.parser")
 
         for heading in soup.select("h2.h3"):
-
-            heading_text = heading.get_text(
-                " ",
-                strip=True,
-            )
-
+            heading_text = heading.get_text(" ", strip=True)
             if heading_text.lower() == "your screens":
-
                 return True
 
         return False
 
     except requests.RequestException:
-
         return False
 
 
-# ============================================================
-# FRESH LOGIN
-# ============================================================
-
 def perform_login(session):
-    """
-    Perform a fresh Screener login.
-
-    Credentials are requested only when the saved session
-    is missing or expired.
-    """
+    """Perform a fresh Screener login."""
 
     print("\n========================================")
     print("FRESH SCREENER LOGIN")
     print("========================================")
 
-    # --------------------------------------------------------
-    # GET LOGIN PAGE
-    # --------------------------------------------------------
-
-    print(
-        "\nFetching Screener login page..."
-    )
-
-    login_response = session.get(
-        LOGIN_URL,
-        timeout=30,
-    )
-
+    login_response = session.get(LOGIN_URL, timeout=30)
     login_response.raise_for_status()
 
-    print(
-        f"Login page response: "
-        f"{login_response.status_code}"
-    )
-
-    login_soup = BeautifulSoup(
-        login_response.text,
-        "html.parser",
-    )
-
-    # --------------------------------------------------------
-    # CSRF TOKEN
-    # --------------------------------------------------------
+    login_soup = BeautifulSoup(login_response.text, "html.parser")
 
     csrf_input = login_soup.select_one(
         'input[name="csrfmiddlewaretoken"]'
     )
 
     if csrf_input is None:
-
         raise RuntimeError(
-            "Could not find csrfmiddlewaretoken "
-            "on Screener login page."
+            "Could not find csrfmiddlewaretoken on Screener login page."
         )
 
-    csrf_token = csrf_input.get(
-        "value"
-    )
-
+    csrf_token = csrf_input.get("value")
     if not csrf_token:
+        raise RuntimeError("Screener returned an empty CSRF token.")
 
-        raise RuntimeError(
-            "Screener returned an empty CSRF token."
-        )
-
-    # --------------------------------------------------------
-    # CREDENTIALS
-    # --------------------------------------------------------
-
-    email = input(
-        "\nScreener email: "
-    ).strip()
-
-    password = getpass(
-        "Screener password: "
-    )
+    email = input("\nScreener email: ").strip()
+    password = getpass("Screener password: ")
 
     if not email or not password:
-
-        raise RuntimeError(
-            "Email and password are required."
-        )
-
-    # --------------------------------------------------------
-    # LOGIN REQUEST
-    # --------------------------------------------------------
+        raise RuntimeError("Email and password are required.")
 
     login_data = {
         "csrfmiddlewaretoken": csrf_token,
@@ -301,10 +160,6 @@ def perform_login(session):
         "Content-Type": "application/x-www-form-urlencoded",
     }
 
-    print(
-        "\nAuthenticating with Screener..."
-    )
-
     login_response = session.post(
         LOGIN_URL,
         data=login_data,
@@ -315,305 +170,132 @@ def perform_login(session):
 
     login_response.raise_for_status()
 
-    print(
-        f"Login response: "
-        f"{login_response.status_code}"
-    )
-
-    print(
-        f"Login final URL: "
-        f"{login_response.url}"
-    )
-
-    # --------------------------------------------------------
-    # VERIFY
-    # --------------------------------------------------------
-
     if not is_authenticated(session):
-
         raise RuntimeError(
-            "Login request completed, but Screener did not "
-            "return the authenticated 'Your screens' section."
+            "Login completed, but Screener did not return the authenticated "
+            "'Your screens' section."
         )
 
-    print(
-        "\nAuthentication successful."
-    )
+    print("Authentication successful.")
 
-    print(
-        "'Your screens' is visible."
-    )
-
-
-# ============================================================
-# AUTHENTICATE SESSION
-# ============================================================
 
 def authenticate_screener(session):
-    """
-    Authentication strategy:
-
-        1. Try saved session.
-        2. Validate it.
-        3. If valid -> reuse it.
-        4. If invalid -> perform fresh login.
-        5. Save new cookies.
-    """
-
-    print("\n========================================")
-    print("SCREENER AUTHENTICATION")
-    print("========================================")
-
-    # --------------------------------------------------------
-    # TRY SAVED SESSION
-    # --------------------------------------------------------
+    """Reuse the saved session or perform a fresh login."""
 
     if load_saved_session(session):
-
-        print(
-            "Checking saved Screener session..."
-        )
-
+        print("Checking saved Screener session...")
         if is_authenticated(session):
-
-            print(
-                "Saved Screener session is valid."
-            )
-
-            print(
-                "Using saved authentication."
-            )
-
+            print("Saved Screener session is valid.")
             return
 
-        print(
-            "Saved session is expired or invalid."
-        )
-
+        print("Saved session is expired or invalid.")
         session.cookies.clear()
 
-    # --------------------------------------------------------
-    # FRESH LOGIN
-    # --------------------------------------------------------
-
-    perform_login(
-        session
-    )
-
-    # --------------------------------------------------------
-    # SAVE NEW SESSION
-    # --------------------------------------------------------
-
-    save_session(
-        session
-    )
+    perform_login(session)
+    save_session(session)
 
 
 # ============================================================
-# GET CUSTOM SCREENS
+# SCREEN DISCOVERY
 # ============================================================
 
 def get_custom_screens(session):
-    """
-    Fetch authenticated Explore page and extract the
-    custom screens under 'Your screens'.
-    """
+    """Return the user's custom Screener screens as {name: href}."""
 
-    print(
-        "\nFetching authenticated Explore page..."
-    )
-
-    response = session.get(
-        EXPLORE_URL,
-        timeout=30,
-    )
-
+    response = session.get(EXPLORE_URL, timeout=30)
     response.raise_for_status()
 
-    print(
-        f"Explore response: "
-        f"{response.status_code}"
-    )
-
-    print(
-        f"Explore URL: "
-        f"{response.url}"
-    )
-
-    soup = BeautifulSoup(
-        response.text,
-        "html.parser",
-    )
-
-    # --------------------------------------------------------
-    # Find "Your screens"
-    # --------------------------------------------------------
+    soup = BeautifulSoup(response.text, "html.parser")
 
     your_screens_card = None
 
     for heading in soup.select("h2.h3"):
-
-        heading_text = heading.get_text(
-            " ",
-            strip=True,
-        )
-
+        heading_text = heading.get_text(" ", strip=True)
         if heading_text.lower() == "your screens":
-
             your_screens_card = heading.parent
             break
 
     if your_screens_card is None:
-
         raise RuntimeError(
-            "Could not find the 'Your screens' card "
-            "on authenticated Screener Explore."
+            "Could not find the 'Your screens' card on authenticated Screener Explore."
         )
-
-    # --------------------------------------------------------
-    # Extract links
-    # --------------------------------------------------------
 
     screens = {}
 
-    screen_items = your_screens_card.select(
-        "a.screen-item"
-    )
-
-    print(
-        f"\nFound {len(screen_items)} screens "
-        "inside 'Your screens'."
-    )
-
-    for item in screen_items:
-
-        name_element = item.select_one(
-            "div.font-weight-500"
-        )
-
+    for item in your_screens_card.select("a.screen-item"):
+        name_element = item.select_one("div.font-weight-500")
         if name_element is None:
             continue
 
-        name = name_element.get_text(
-            " ",
-            strip=True,
-        )
+        name = name_element.get_text(" ", strip=True)
+        href = item.get("href")
 
-        href = item.get(
-            "href"
-        )
-
-        if not name or not href:
-            continue
-
-        screens[name] = href
+        if name and href:
+            screens[name] = href
 
     if not screens:
-
-        raise RuntimeError(
-            "Found 'Your screens' but no screen links."
-        )
+        raise RuntimeError("Found 'Your screens' but no screen links.")
 
     return screens
 
 
 # ============================================================
-# VALIDATE TARGET GROUPS
+# SCREEN NAME VALIDATION
 # ============================================================
 
-def validate_target_groups(screens):
-    """
-    Ensure all five required screens exist.
-    """
+def validate_requested_screens(screens, requested_screen_names):
+    """Validate the screen names typed in the dashboard."""
 
-    missing_groups = [
-        group
-        for group in TARGET_GROUPS
-        if group not in screens
+    requested = [
+        name.strip()
+        for name in requested_screen_names
+        if name.strip()
     ]
 
-    if missing_groups:
+    if not requested:
+        raise ValueError("Enter at least one Screener screen name.")
 
-        print(
-            "\n========================================"
-        )
-        print(
-            "MISSING REQUIRED SCREENS"
-        )
-        print(
-            "========================================"
+    duplicates = []
+    seen = set()
+
+    for name in requested:
+        if name in seen and name not in duplicates:
+            duplicates.append(name)
+        seen.add(name)
+
+    if duplicates:
+        raise ValueError(f"Duplicate screen names entered: {duplicates}")
+
+    missing = [name for name in requested if name not in screens]
+
+    if missing:
+        available_preview = list(screens.keys())[:20]
+        raise ValueError(
+            "These requested Screener screens were not found: "
+            f"{missing}. Available screen names include: {available_preview}"
         )
 
-        for group in missing_groups:
-            print(
-                f"- {group}"
-            )
-
-        raise RuntimeError(
-            "One or more required custom screens "
-            "were not found."
-        )
+    return requested
 
 
 # ============================================================
 # PROCESS ONE SCREEN
 # ============================================================
 
-def process_screen(
-    session,
-    group_name,
-    screen_href,
-):
-    """
-    Send the authenticated session and screen URL
-    into innerFlow.
-    """
+def process_screen(session, screen_name, screen_href):
+    """Send one selected screen into innerFlow."""
 
-    screen_url = urljoin(
-        BASE_URL,
-        screen_href,
-    )
+    screen_url = urljoin(BASE_URL, screen_href)
 
-    print("\n")
+    print("\n========================================")
+    print(f"SCREEN: {screen_name}")
     print("========================================")
-    print(
-        f"GROUP: {group_name}"
-    )
-    print("========================================")
-
-    print(
-        f"Screen URL: {screen_url}"
-    )
-
-    # --------------------------------------------------------
-    # INNER FLOW
-    # --------------------------------------------------------
+    print(f"Screen URL: {screen_url}")
 
     results = scrape_screen(
         session=session,
         screen_url=screen_url,
     )
-
-    # --------------------------------------------------------
-    # Summary
-    # --------------------------------------------------------
-
-    print("\n----------------------------------------")
-    print(
-        f"Completed: {group_name}"
-    )
-
-    print(
-        f"Expected rows: "
-        f"{results['total_results']}"
-    )
-
-    print(
-        f"Collected rows: "
-        f"{results['total_rows_collected']}"
-    )
-
-    print("----------------------------------------")
 
     return results
 
@@ -623,26 +305,10 @@ def process_screen(
 # ============================================================
 
 def return_to_explore(session):
-    """
-    Return to Explore after completing one screen.
-    """
+    """Return to Explore after one screen."""
 
-    print(
-        "\nReturning to Screener Explore..."
-    )
-
-    response = session.get(
-        EXPLORE_URL,
-        timeout=30,
-    )
-
+    response = session.get(EXPLORE_URL, timeout=30)
     response.raise_for_status()
-
-    print(
-        f"Back to Explore: "
-        f"{response.status_code}"
-    )
-
     return response
 
 
@@ -650,179 +316,88 @@ def return_to_explore(session):
 # MAIN OUTER FLOW
 # ============================================================
 
-def run_outer_flow():
-    """
-    Complete Screener workflow.
-
-    Authentication happens once.
-
-    The same authenticated session is then passed
-    into innerFlow for every screen.
-    """
+def run_outer_flow(requested_screen_names):
+    """Scrape only the Screener screens selected by the dashboard."""
 
     session = create_screener_session()
-
     all_results = {}
 
     try:
-
-        # ====================================================
-        # 1. AUTHENTICATION
-        # ====================================================
-
-        authenticate_screener(
-            session
-        )
-
-        # ====================================================
-        # 2. DISCOVER CUSTOM SCREENS
-        # ====================================================
-
-        screens = get_custom_screens(
-            session
-        )
-
         print("\n========================================")
-        print("CUSTOM SCREENS FOUND")
+        print("SCREENER OUTER FLOW")
         print("========================================")
 
+        # 1. Login once.
+        authenticate_screener(session)
+
+        # 2. Find every custom screen in the account.
+        screens = get_custom_screens(session)
+
+        print("\nCUSTOM SCREENS FOUND")
         for name, href in screens.items():
+            print(f"{name} -> {href}")
 
-            print(
-                f"{name} -> {href}"
-            )
-
-        # ====================================================
-        # 3. VALIDATE
-        # ====================================================
-
-        validate_target_groups(
-            screens
+        # 3. Keep only the screen names the user typed.
+        selected_screens = validate_requested_screens(
+            screens,
+            requested_screen_names,
         )
 
-        # ====================================================
-        # 4. PROCESS ALL FIVE GROUPS
-        # ====================================================
+        print("\nSELECTED SCREENS")
+        for index, screen_name in enumerate(selected_screens, start=1):
+            print(f"{index}. {screen_name}")
 
-        for index, group_name in enumerate(
-            TARGET_GROUPS,
-            start=1,
-        ):
-
-            print("\n\n")
-            print("========================================")
-            print(
-                f"GROUP {index}/{len(TARGET_GROUPS)}"
-            )
-            print(
-                group_name
-            )
-            print("========================================")
-
-            # ------------------------------------------------
-            # Inner flow
-            # ------------------------------------------------
-
+        # 4. Scrape selected screens only.
+        for index, screen_name in enumerate(selected_screens, start=1):
             results = process_screen(
                 session=session,
-                group_name=group_name,
-                screen_href=screens[group_name],
+                screen_name=screen_name,
+                screen_href=screens[screen_name],
             )
-            
+
             save_group_csv(
-                group_name=group_name,
+                group_name=screen_name,
                 rows=results["rows"],
                 group_number=index,
             )
 
-            # ------------------------------------------------
-            # Keep results in memory
-            # ------------------------------------------------
+            all_results[screen_name] = results
 
-            all_results[group_name] = results
-
-            # ------------------------------------------------
-            # Return to Explore
-            # ------------------------------------------------
-
-            return_to_explore(
-                session
-            )
-
-            time.sleep(1)
-
-        # ====================================================
-        # 5. FINAL SUMMARY
-        # ====================================================
+            if index < len(selected_screens):
+                return_to_explore(session)
+                time.sleep(1)
 
         print("\n========================================")
-        print("COMPLETE OUTER + INNER FLOW")
+        print("SCREENER OUTER FLOW COMPLETE")
         print("========================================")
 
-        for group_name, results in all_results.items():
-
+        for screen_name, results in all_results.items():
             print(
-                f"{group_name}: "
+                f"{screen_name}: "
                 f"{results['total_rows_collected']} / "
                 f"{results['total_results']} rows"
             )
 
-        print(
-            "\nAll five screens processed."
-        )
-        
-        
-        
-        # ====================================================
-        # 6. RUN LOGIC FLOW
-        # ====================================================
-
-        print("\n")
-        print("========================================")
-        print("STARTING LOGIC FLOW")
-        print("========================================")
-
-        logic_results = run_logic_flow()
-
-        print("\n")
-        print("========================================")
-        print("LOGIC FLOW COMPLETE")
-        print("========================================")
-
         return all_results
 
-    except requests.RequestException as e:
-
-        print("\n========================================")
-        print("SCREENER REQUEST ERROR")
-        print("========================================")
-
-        print(e)
-
+    except requests.RequestException as exc:
+        print(f"\nSCREENER REQUEST ERROR: {exc}")
         raise
 
-    except Exception as e:
-
-        print("\n========================================")
-        print("OUTER FLOW ERROR")
-        print("========================================")
-
-        print(e)
-
+    except Exception as exc:
+        print(f"\nSCREENER OUTER FLOW ERROR: {exc}")
         raise
 
     finally:
-
         session.close()
+        print("\nScreener session closed.")
 
-        print(
-            "\nScreener session closed."
-        )
-
-
-# ============================================================
-# ENTRY POINT
-# ============================================================
 
 if __name__ == "__main__":
-    run_outer_flow()
+    names_text = input(
+        "Enter Screener screen names, one per line. Finish with an empty line:\n"
+    )
+
+    # Simple command-line fallback for running this file directly.
+    requested = [name.strip() for name in names_text.split(",") if name.strip()]
+    run_outer_flow(requested)

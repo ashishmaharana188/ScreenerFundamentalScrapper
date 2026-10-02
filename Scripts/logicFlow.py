@@ -1,367 +1,41 @@
-# logicFlow.py
+"""Comparison logic for ScanX and Screener CSV files.
 
-import json
+New flow
+--------
+Level 1:
+    ScanX company universe ∩ each selected Screener screen
+
+Level 2:
+    The Level-1 results from multiple Screener screens are intersected.
+
+There is no hard-coded Screener screen name and no requirement that
+companies appear in a fixed set of screens.
+"""
+
+from __future__ import annotations
+
 import re
-import time
 from pathlib import Path
 
 import pandas as pd
-import yfinance as yf
 
 
 # ============================================================
-# CONFIGURATION
+# DIRECTORIES
 # ============================================================
 
 BASE_DATA_DIR = Path("screener_data")
-
 GROUPS_DIR = BASE_DATA_DIR / "groups"
-
-FINAL_DIR = BASE_DATA_DIR / "final"
-
-INDUSTRY_CACHE_FILE = BASE_DATA_DIR / "industry_cache.json"
-
-
-#TARGET_GROUPS = [
-#    "Core Business Quality",
-#    "Growth and Earnings Quality",
-#    "Balance Sheet and Cash-Flow Strength",
-#    "Valuation",
-#    "Promoters and Shareholder Structure",
-#]
-
-TARGET_GROUPS = [
-    "Quality Gate",
-    "Under valued",
-    "Over Valued",
-    "Loose check"
-]
-
-
-#GROUP_FILE_NAMES = {
-#    "Core Business Quality":
-#        "01_core_business_quality.csv",
-
-#    "Growth and Earnings Quality":
-#        "02_growth_and_earnings_quality.csv",
-
-#    "Balance Sheet and Cash-Flow Strength":
-#        "03_balance_sheet_and_cash_flow_strength.csv",
-
-#    "Valuation":
-#        "04_valuation.csv",
-
-#    "Promoters and Shareholder Structure":
-#        "05_promoters_and_shareholder_structure.csv",
-#}
-
-TARGET_GROUPS = [
-    "Quality Gate",
-    "Under valued",
-    "Over Valued",
-    "Loose check",
-]
-
-GROUP_FILE_NAMES = {
-    "Quality Gate":
-        "01_quality_gate.csv",
-
-    "Under valued":
-        "02_under_valued.csv",
-
-    "Over Valued":
-        "03_over_valued.csv",
-
-    "Loose check":
-        "04_loose_check.csv",
-}
-
-# ------------------------------------------------------------
-# Final selection rule
-#
-# Currently:
-# Company must appear in every one of the five groups.
-#
-# Later this can be changed without touching scraping code.
-# ------------------------------------------------------------
-
-FINAL_REQUIRED_GROUPS = [
-    "Core Business Quality",
-    "Growth and Earnings Quality",
-    "Balance Sheet and Cash-Flow Strength",
-    "Valuation",
-    "Promoters and Shareholder Structure",
-]
-
-
-# ------------------------------------------------------------
-# yfinance spacing
-# ------------------------------------------------------------
-
-YFINANCE_DELAY = 1.0
+COMPARISON_DIR = BASE_DATA_DIR / "comparison"
+SCANX_DIR = Path("scanx_data")
 
 
 # ============================================================
-# DIRECTORY SETUP
+# NAME NORMALIZATION
 # ============================================================
 
-def initialize_logic_directories():
-    """
-    Make sure the post-processing directories exist.
-    """
-
-    GROUPS_DIR.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    FINAL_DIR.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-
-# ============================================================
-# INDUSTRY CACHE
-# ============================================================
-
-def load_industry_cache():
-    """
-    Load locally cached Yahoo Finance industry lookups.
-
-    This prevents querying the same company repeatedly
-    across multiple group files.
-    """
-
-    if not INDUSTRY_CACHE_FILE.exists():
-        return {}
-
-    try:
-
-        with open(
-            INDUSTRY_CACHE_FILE,
-            "r",
-            encoding="utf-8",
-        ) as file:
-
-            data = json.load(file)
-
-        if isinstance(data, dict):
-            return data
-
-    except Exception as e:
-
-        print(
-            f"WARNING: Could not load industry cache: {e}"
-        )
-
-    return {}
-
-
-def save_industry_cache(cache):
-    """
-    Save industry lookup cache.
-    """
-
-    initialize_logic_directories()
-
-    with open(
-        INDUSTRY_CACHE_FILE,
-        "w",
-        encoding="utf-8",
-    ) as file:
-
-        json.dump(
-            cache,
-            file,
-            indent=2,
-            ensure_ascii=False,
-        )
-
-
-# ============================================================
-# EXTRACT YAHOO SYMBOL
-# ============================================================
-
-def extract_screener_symbol(company_url):
-    """
-    Extract the Screener symbol from company_url.
-
-    Example:
-
-        https://www.screener.in/company/HDFCAMC/
-
-    becomes:
-
-        HDFCAMC
-    """
-
-    if not company_url:
-        return None
-
-    match = re.search(
-        r"/company/([^/]+)/",
-        str(company_url),
-    )
-
-    if not match:
-        return None
-
-    symbol = match.group(1).strip()
-
-    if not symbol:
-        return None
-
-    return symbol
-
-
-# ============================================================
-# GET INDUSTRY FROM YFINANCE
-# ============================================================
-
-def get_yfinance_industry(
-    screener_symbol,
-    cache,
-):
-    """
-    Get industry from Yahoo Finance.
-
-    Tries:
-        SYMBOL.NS
-        SYMBOL.BO
-
-    The first successful industry value is returned.
-
-    Cache is checked before making a Yahoo Finance request.
-    """
-
-    if not screener_symbol:
-        return None
-
-    screener_symbol = str(
-        screener_symbol
-    ).strip()
-
-    if not screener_symbol:
-        return None
-
-    # --------------------------------------------------------
-    # Cached result
-    # --------------------------------------------------------
-
-    if screener_symbol in cache:
-
-        cached_value = cache[
-            screener_symbol
-        ]
-
-        if cached_value:
-            return cached_value
-
-    # --------------------------------------------------------
-    # Candidate Yahoo symbols
-    # --------------------------------------------------------
-
-    candidates = []
-
-    if screener_symbol.endswith(
-        ".NS"
-    ) or screener_symbol.endswith(
-        ".BO"
-    ):
-
-        candidates.append(
-            screener_symbol
-        )
-
-    else:
-
-        candidates.extend(
-            [
-                f"{screener_symbol}.NS",
-                f"{screener_symbol}.BO",
-            ]
-        )
-
-    # --------------------------------------------------------
-    # Query Yahoo Finance
-    # --------------------------------------------------------
-
-    for yahoo_symbol in candidates:
-
-        try:
-
-            print(
-                f"    Yahoo Finance lookup: "
-                f"{yahoo_symbol}"
-            )
-
-            ticker = yf.Ticker(
-                yahoo_symbol
-            )
-
-            info = ticker.info
-
-            industry = info.get(
-                "industry"
-            )
-
-            if industry:
-
-                industry = str(
-                    industry
-                ).strip()
-
-                if industry:
-
-                    cache[
-                        screener_symbol
-                    ] = industry
-
-                    print(
-                        f"    industry: "
-                        f"{industry}"
-                    )
-
-                    time.sleep(
-                        YFINANCE_DELAY
-                    )
-
-                    return industry
-
-        except Exception as e:
-
-            print(
-                f"    Yahoo lookup failed for "
-                f"{yahoo_symbol}: {e}"
-            )
-
-        time.sleep(
-            YFINANCE_DELAY
-        )
-
-    # --------------------------------------------------------
-    # No industry found
-    # --------------------------------------------------------
-
-    cache[
-        screener_symbol
-    ] = ""
-
-    print(
-        f"    industry not found for "
-        f"{screener_symbol}"
-    )
-
-    return None
-
-
-# ============================================================
-# INDUSTRY ENRICHMENT: COMPANY-FIRST
-# ============================================================
-
-def normalize_company_name(value):
-    """Normalize company names so the same company matches reliably."""
+def normalize_company_name(value) -> str:
+    """Create a comparison key from a company name."""
 
     if pd.isna(value):
         return ""
@@ -371,885 +45,251 @@ def normalize_company_name(value):
     return value
 
 
-def load_all_group_files():
-    """Load all five group CSVs into memory."""
+# ============================================================
+# FILE DISCOVERY
+# ============================================================
 
-    group_dataframes = {}
+def get_scanx_files() -> list[Path]:
+    """Return all CSV files currently available in scanx_data/."""
 
-    for group_name in TARGET_GROUPS:
-        filename = GROUP_FILE_NAMES[group_name]
-        file_path = GROUPS_DIR / filename
+    if not SCANX_DIR.exists():
+        return []
 
-        if not file_path.exists():
-            raise FileNotFoundError(
-                f"Group CSV not found: {file_path}"
-            )
-
-        df = pd.read_csv(
-            file_path,
-            dtype={"company_id": "string"},
-        )
-
-        required_columns = [
-            "company_id",
-            "company_name",
-            "company_url",
-        ]
-
-        missing_columns = [
-            column
-            for column in required_columns
-            if column not in df.columns
-        ]
-
-        if missing_columns:
-            raise RuntimeError(
-                f"{group_name} is missing required columns: "
-                f"{missing_columns}"
-            )
-
-        group_dataframes[group_name] = df
-
-        print(
-            f"Loaded {group_name}: {len(df)} rows"
-        )
-
-    return group_dataframes
-
-
-def build_distinct_company_map(group_dataframes):
-    """
-    Build ONE company list from all five group files.
-
-    Distinctness is based on normalized company_name.
-    The first available company_url is retained so Yahoo Finance
-    only needs to be queried once for that company.
-    """
-
-    records = {}
-
-    for group_name in TARGET_GROUPS:
-        df = group_dataframes[group_name]
-
-        for _, row in df.iterrows():
-            company_name = row.get("company_name")
-            company_key = normalize_company_name(company_name)
-
-            if not company_key:
-                continue
-
-            if company_key not in records:
-                records[company_key] = {
-                    "company_name": str(company_name).strip(),
-                    "company_url": str(row.get("company_url", "")).strip(),
-                }
-            else:
-                # If the first occurrence had no usable URL,
-                # use a later group's URL.
-                existing_url = records[company_key]["company_url"]
-                current_url = str(row.get("company_url", "")).strip()
-
-                if not existing_url and current_url:
-                    records[company_key]["company_url"] = current_url
-
-    return records
-
-
-def build_industry_mapping(group_dataframes, industry_cache):
-    """
-    Fetch industry ONCE per distinct company across all five groups.
-
-    Flow:
-        1. Read all five group files.
-        2. Build one distinct company-name map.
-        3. Resolve Yahoo Finance industry once per company.
-        4. Return {normalized_company_name: industry}.
-    """
-
-    company_map = build_distinct_company_map(
-        group_dataframes
+    return sorted(
+        path
+        for path in SCANX_DIR.glob("*.csv")
+        if path.is_file()
     )
 
-    print("\n========================================")
-    print("BUILDING DISTINCT COMPANY INDUSTRY MAP")
-    print("========================================")
 
-    print(
-        f"Rows across all groups: "
-        f"{sum(len(df) for df in group_dataframes.values())}"
+def get_screener_files() -> list[Path]:
+    """Return all CSV files currently available in screener_data/groups/."""
+
+    if not GROUPS_DIR.exists():
+        return []
+
+    return sorted(
+        path
+        for path in GROUPS_DIR.glob("*.csv")
+        if path.is_file()
     )
-
-    print(
-        f"Distinct companies: {len(company_map)}"
-    )
-
-    industry_mapping = {}
-
-    for index, (company_key, company) in enumerate(
-        company_map.items(),
-        start=1,
-    ):
-
-        company_name = company["company_name"]
-        company_url = company["company_url"]
-
-        print("\n----------------------------------------")
-        print(
-            f"Company {index}/{len(company_map)}: "
-            f"{company_name}"
-        )
-
-        symbol = extract_screener_symbol(
-            company_url
-        )
-
-        if not symbol:
-            print(
-                "  Could not extract Screener symbol."
-            )
-            industry_mapping[company_key] = ""
-            continue
-
-        industry = get_yfinance_industry(
-            screener_symbol=symbol,
-            cache=industry_cache,
-        )
-
-        industry_mapping[company_key] = (
-            industry if industry else ""
-        )
-
-    return industry_mapping
-
-
-def apply_industry_mapping_to_groups(
-    group_dataframes,
-    industry_mapping,
-):
-    """
-    Insert the newly built industry mapping into each original group CSV.
-
-    Matching is done by normalized company_name.
-    The same company therefore receives the exact same industry value
-    in every group where it appears.
-    """
-
-    updated_dataframes = {}
-
-    for group_name in TARGET_GROUPS:
-        df = group_dataframes[group_name].copy()
-
-        df["industry"] = (
-            df["company_name"]
-            .map(normalize_company_name)
-            .map(industry_mapping)
-            .fillna("")
-        )
-
-        desired_order = []
-
-        for column in [
-            "company_id",
-            "company_name",
-            "company_url",
-            "industry",
-        ]:
-            if column in df.columns:
-                desired_order.append(column)
-
-        remaining_columns = [
-            column
-            for column in df.columns
-            if column not in desired_order
-        ]
-
-        df = df[
-            desired_order + remaining_columns
-        ]
-
-        file_path = GROUPS_DIR / GROUP_FILE_NAMES[group_name]
-
-        df.to_csv(
-            file_path,
-            index=False,
-            encoding="utf-8-sig",
-        )
-
-        found_count = (
-            df["industry"]
-            .astype(str)
-            .str.strip()
-            .ne("")
-            .sum()
-        )
-
-        print("\nSaved enriched group:")
-        print(f"  {file_path}")
-        print(f"  Rows: {len(df)}")
-        print(
-            f"  industry found: "
-            f"{found_count}/{len(df)}"
-        )
-
-        updated_dataframes[group_name] = df
-
-    return updated_dataframes
-
-
-def run_industry_enrichment():
-    """
-    Company-first industry enrichment.
-
-    IMPORTANT:
-    Yahoo Finance is queried once per distinct company across ALL
-    five group files, not once per group file.
-    """
-
-    initialize_logic_directories()
-
-    print("\n")
-    print("########################################")
-    print("# INDUSTRY ENRICHMENT")
-    print("########################################")
-
-    group_dataframes = load_all_group_files()
-
-    industry_cache = load_industry_cache()
-
-    industry_mapping = build_industry_mapping(
-        group_dataframes=group_dataframes,
-        industry_cache=industry_cache,
-    )
-
-    save_industry_cache(
-        industry_cache
-    )
-
-    updated_dataframes = apply_industry_mapping_to_groups(
-        group_dataframes=group_dataframes,
-        industry_mapping=industry_mapping,
-    )
-
-    found = sum(
-        1
-        for industry in industry_mapping.values()
-        if str(industry).strip()
-    )
-
-    print("\n========================================")
-    print("INDUSTRY ENRICHMENT COMPLETE")
-    print("========================================")
-    print(
-        f"Distinct companies processed: "
-        f"{len(industry_mapping)}"
-    )
-    print(
-        f"Industries found: {found}"
-    )
-    print(
-        f"industry cache entries: "
-        f"{len(industry_cache)}"
-    )
-
-    return {
-        "companies_processed": len(industry_mapping),
-        "industries_found": found,
-        "industry_mapping": industry_mapping,
-        "group_dataframes": updated_dataframes,
-    }
 
 
 # ============================================================
-# LOAD GROUP CSVs
+# CSV LOADING
 # ============================================================
 
-def load_group_csv(
-    group_name,
-):
-    """
-    Load a group CSV after industry enrichment.
-    """
+def load_scanx_company_names(file_path: Path) -> pd.DataFrame:
+    """Load one ScanX CSV and validate its company_name column."""
 
-    file_path = (
-        GROUPS_DIR
-        / GROUP_FILE_NAMES[group_name]
-    )
+    df = pd.read_csv(file_path)
 
-    if not file_path.exists():
-
-        raise FileNotFoundError(
-            f"Group CSV not found: {file_path}"
+    if "company_name" not in df.columns:
+        raise ValueError(
+            f"ScanX file is missing 'company_name': {file_path}"
         )
 
-    df = pd.read_csv(
-        file_path,
-        dtype={
-            "company_id": "string"
-        },
-    )
+    df = df[["company_name"]].copy()
+    df["comparison_key"] = df["company_name"].map(normalize_company_name)
+    df = df[df["comparison_key"] != ""].drop_duplicates("comparison_key")
 
     return df
 
 
-# ============================================================
-# PREPARE GROUP FOR MERGE
-# ============================================================
+def load_screener_file(file_path: Path) -> pd.DataFrame:
+    """Load one saved Screener result CSV."""
 
-def prepare_group_for_merge(
-    group_name,
-    df,
-):
-    """
-    Prepare one group DataFrame for the final merge.
+    df = pd.read_csv(file_path)
 
-    Common identity columns remain unchanged.
-
-    Group-specific metrics are prefixed with the group name
-    so columns from different screens cannot collide.
-    """
+    if "company_name" not in df.columns:
+        raise ValueError(
+            f"Screener file is missing 'company_name': {file_path}"
+        )
 
     df = df.copy()
-
-    # --------------------------------------------------------
-    # Ensure unique company per group
-    # --------------------------------------------------------
-
-    duplicate_count = (
-        df["company_id"]
-        .duplicated()
-        .sum()
-    )
-
-    if duplicate_count:
-
-        print(
-            f"WARNING: {group_name} contains "
-            f"{duplicate_count} duplicate company_id rows."
-        )
-
-        df = df.drop_duplicates(
-            subset=["company_id"],
-            keep="first",
-        )
-
-    # --------------------------------------------------------
-    # Common columns
-    # --------------------------------------------------------
-
-    common_columns = [
-        "company_id",
-         "company_name",
-        "company_url",
-        "industry",
-    ]
-
-    existing_common = [
-        column
-        for column in common_columns
-        if column in df.columns
-    ]
-
-    # --------------------------------------------------------
-    # Group-specific columns
-    # --------------------------------------------------------
-
-    metric_columns = [
-        column
-        for column in df.columns
-        if column not in existing_common
-    ]
-
-    safe_group_name = re.sub(
-        r"[^A-Za-z0-9]+",
-        "_",
-        group_name,
-    ).strip("_")
-
-    rename_map = {
-        column:
-            f"{safe_group_name}__{column}"
-        for column in metric_columns
-    }
-
-    df = df.rename(
-        columns=rename_map
-    )
+    df["comparison_key"] = df["company_name"].map(normalize_company_name)
+    df = df[df["comparison_key"] != ""].drop_duplicates("comparison_key")
 
     return df
 
 
 # ============================================================
-# COALESCE COMMON COLUMN
+# SAFE OUTPUT NAME
 # ============================================================
 
-def coalesce_column(
-    df,
-    column,
-):
-    """
-    Ensure a common field has one consolidated value.
+def make_safe_filename(name: str) -> str:
+    """Convert a screen/file label to a safe filename."""
 
-    For example, industry may exist in several group frames
-    after the merge.
-    """
+    filename = Path(name).stem.lower().strip()
+    filename = re.sub(r"[^a-z0-9]+", "_", filename)
+    filename = filename.strip("_")
 
-    matching_columns = [
-        col
-        for col in df.columns
-        if col == column
-        or col.startswith(
-            f"{column}_"
-        )
-    ]
+    return filename or "comparison"
 
-    if not matching_columns:
-        return df
 
-    # If already only one column exists, nothing to do.
-    if len(matching_columns) == 1:
-        return df
+# ============================================================
+# LEVEL 1: SCANX x SCREENER
+# ============================================================
 
-    df[column] = ""
+def compare_scanx_with_screener(
+    scanx_file: Path,
+    screener_file: Path,
+) -> tuple[pd.DataFrame, Path]:
+    """Keep Screener rows whose company also exists in ScanX."""
 
-    for col in matching_columns:
+    scanx_df = load_scanx_company_names(scanx_file)
+    screener_df = load_screener_file(screener_file)
 
-        values = (
-            df[col]
-            .fillna("")
-            .astype(str)
-            .str.strip()
-        )
+    scanx_keys = set(scanx_df["comparison_key"])
 
-        mask = (
-            df[column]
-            .fillna("")
-            .astype(str)
-            .str.strip()
-            .eq("")
-            & values.ne("")
-        )
+    filtered = screener_df[
+        screener_df["comparison_key"].isin(scanx_keys)
+    ].copy()
 
-        df.loc[
-            mask,
-            column,
-        ] = values[mask]
+    # comparison_key is internal only and should not appear in the result.
+    filtered = filtered.drop(columns=["comparison_key"])
 
-    columns_to_drop = [
-        col
-        for col in matching_columns
-        if col != column
-    ]
+    level_1_dir = COMPARISON_DIR / "level_1_scanx_vs_screener"
+    level_1_dir.mkdir(parents=True, exist_ok=True)
 
-    df = df.drop(
-        columns=columns_to_drop
+    output_file = level_1_dir / (
+        f"scanx_vs_{make_safe_filename(screener_file.name)}"
     )
 
-    return df
+    if output_file.suffix.lower() != ".csv":
+        output_file = output_file.with_suffix(".csv")
 
-
-# ============================================================
-# MERGE ALL GROUPS
-# ============================================================
-
-def build_merged_candidates(
-    group_dataframes,
-):
-    """
-    Outer-merge all five groups using company_id.
-
-    This preserves every company that appears in at least
-    one screen.
-    """
-
-    print("\n========================================")
-    print("BUILDING MERGED DATASET")
-    print("========================================")
-
-    merged_df = None
-
-    for group_index, group_name in enumerate(
-        TARGET_GROUPS,
-        start=1,
-    ):
-
-        df = group_dataframes[
-            group_name
-        ]
-
-        prepared = prepare_group_for_merge(
-            group_name,
-            df,
-        )
-
-        # ----------------------------------------------------
-        # Add group membership flag
-        # ----------------------------------------------------
-
-        group_flag = (
-            f"Group_{group_index}_Pass"
-        )
-
-        prepared[
-            group_flag
-        ] = True
-
-        # ----------------------------------------------------
-        # First group
-        # ----------------------------------------------------
-
-        if merged_df is None:
-
-            merged_df = prepared
-
-            continue
-
-        # ----------------------------------------------------
-        # Subsequent groups
-        # ----------------------------------------------------
-
-        merged_df = merged_df.merge(
-            prepared,
-            on="company_id",
-            how="outer",
-            suffixes=("", f"_group_{group_index}"),
-        )
-
-    # --------------------------------------------------------
-    # Consolidate common columns
-    # --------------------------------------------------------
-
-    for column in [
-        "company_name",
-        "company_url",
-        "industry",
-    ]:
-
-        merged_df = coalesce_column(
-            merged_df,
-            column,
-        )
-
-    # --------------------------------------------------------
-    # Ensure all group flags exist
-    # --------------------------------------------------------
-
-    for group_index in range(
-        1,
-        len(TARGET_GROUPS) + 1,
-    ):
-
-        group_flag = (
-            f"Group_{group_index}_Pass"
-        )
-
-        if group_flag not in merged_df.columns:
-
-            merged_df[
-                group_flag
-            ] = False
-
-        else:
-
-            merged_df[
-                group_flag
-            ] = (
-                merged_df[
-                    group_flag
-                ]
-                .fillna(False)
-                .astype(bool)
-            )
-
-    # --------------------------------------------------------
-    # Number of groups passed
-    # --------------------------------------------------------
-
-    group_flags = [
-        f"Group_{i}_Pass"
-        for i in range(
-            1,
-            len(TARGET_GROUPS) + 1,
-        )
-    ]
-
-    merged_df[
-        "Groups_Passed"
-    ] = merged_df[
-        group_flags
-    ].sum(axis=1)
-
-    # --------------------------------------------------------
-    # Group names passed
-    # --------------------------------------------------------
-
-    def get_groups_passed(row):
-
-        passed = []
-
-        for index, group_name in enumerate(
-            TARGET_GROUPS,
-            start=1,
-        ):
-
-            if row[
-                f"Group_{index}_Pass"
-            ]:
-
-                passed.append(
-                    group_name
-                )
-
-        return " | ".join(
-            passed
-        )
-
-    merged_df[
-        "Groups_Passed_Names"
-    ] = merged_df.apply(
-        get_groups_passed,
-        axis=1,
-    )
-
-    # --------------------------------------------------------
-    # Sort
-    # --------------------------------------------------------
-
-    merged_df = merged_df.sort_values(
-        by=[
-            "Groups_Passed",
-            "company_name",
-        ],
-        ascending=[
-            False,
-            True,
-        ],
-        na_position="last",
-    ).reset_index(
-        drop=True
-    )
-
-    return merged_df
-
-
-# ============================================================
-# SAVE CSV
-# ============================================================
-
-def save_dataframe(
-    df,
-    file_path,
-):
-    """
-    Save DataFrame to CSV.
-    """
-
-    file_path.parent.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    df.to_csv(
-        file_path,
+    filtered.to_csv(
+        output_file,
         index=False,
         encoding="utf-8-sig",
     )
 
     print(
-        f"\nSaved:"
+        f"Level 1 | {screener_file.name} | "
+        f"ScanX companies={len(scanx_df)} | "
+        f"Screener rows={len(screener_df)} | "
+        f"Common={len(filtered)}"
     )
 
-    print(
-        f"  {file_path.resolve()}"
-    )
-
-    print(
-        f"  Rows: {len(df)}"
-    )
+    return filtered, output_file
 
 
-# ============================================================
-# APPLY FINAL LOGIC
-# ============================================================
+def run_level_1(
+    scanx_file: Path,
+    screener_files: list[Path],
+) -> dict[str, dict]:
+    """Run ScanX ∩ Screener for every selected Screener file."""
 
-def build_final_candidates(
-    merged_df,
-):
-    """
-    Apply the configured final-selection rule.
-
-    Current rule:
-        company must appear in every group listed in
-        FINAL_REQUIRED_GROUPS.
-    """
-
-    required_group_indexes = []
-
-    for group_name in FINAL_REQUIRED_GROUPS:
-
-        if group_name not in TARGET_GROUPS:
-
-            raise ValueError(
-                f"Unknown final-required group: "
-                f"{group_name}"
-            )
-
-        index = (
-            TARGET_GROUPS.index(
-                group_name
-            )
-            + 1
-        )
-
-        required_group_indexes.append(
-            index
-        )
-
-    required_flags = [
-        f"Group_{index}_Pass"
-        for index in required_group_indexes
-    ]
-
-    final_mask = merged_df[
-        required_flags
-    ].all(axis=1)
-
-    final_df = merged_df[
-        final_mask
-    ].copy()
-
-    # --------------------------------------------------------
-    # Sort final candidates
-    # --------------------------------------------------------
-
-    final_df = final_df.sort_values(
-        by=[
-            "Groups_Passed",
-            "company_name",
-        ],
-        ascending=[
-            False,
-            True,
-        ],
-        na_position="last",
-    ).reset_index(
-        drop=True
-    )
-
-    return final_df
-
-
-# ============================================================
-# CONTROLLED LOGIC STAGES
-# ============================================================
-
-def run_group_merge():
-    """Merge the already-saved group CSVs. Does not fetch Industry."""
-
-    initialize_logic_directories()
-
-    group_dataframes = {}
-
-    for group_name in TARGET_GROUPS:
-        group_dataframes[group_name] = load_group_csv(
-            group_name
-        )
-
-    print("\n")
-    print("########################################")
-    print("# STAGE: MERGING GROUPS")
-    print("########################################")
-
-    merged_df = build_merged_candidates(
-        group_dataframes
-    )
-
-    merged_file = FINAL_DIR / "merged_candidates.csv"
-
-    save_dataframe(
-        merged_df,
-        merged_file,
-    )
-
-    return merged_df
-
-
-def run_final_logic(merged_df=None):
-    """Apply final-selection logic. Does not fetch Industry."""
-
-    if merged_df is None:
-        merged_file = FINAL_DIR / "merged_candidates.csv"
-
-        if not merged_file.exists():
-            merged_df = run_group_merge()
-        else:
-            merged_df = pd.read_csv(
-                merged_file,
-            )
-
-    print("\n")
-    print("########################################")
-    print("# STAGE: FINAL FILTER")
-    print("########################################")
-
-    final_df = build_final_candidates(
-        merged_df
-    )
-
-    final_file = FINAL_DIR / "final_candidates.csv"
-
-    save_dataframe(
-        final_df,
-        final_file,
-    )
-
-    print("\n========================================")
-    print("FINAL LOGIC COMPLETE")
-    print("========================================")
-    print(
-        f"Companies across any group: {len(merged_df)}"
-    )
-    print(
-        f"Final candidates: {len(final_df)}"
-    )
-
-    return final_df
-
-
-def run_logic_flow(include_industry=False):
-    """
-    Run post-processing with Industry OFF by default.
-
-    include_industry=True explicitly performs:
-        1. Distinct-company Industry enrichment
-        2. Group merge
-        3. Final logic
-    """
+    if not screener_files:
+        raise ValueError("Select at least one Screener file for comparison.")
 
     results = {}
 
-    if include_industry:
-        results["industry"] = run_industry_enrichment()
+    for screener_file in screener_files:
+        filtered_df, output_file = compare_scanx_with_screener(
+            scanx_file=scanx_file,
+            screener_file=screener_file,
+        )
 
-    results["merged"] = run_group_merge()
-    results["final"] = run_final_logic(
-        results["merged"]
-    )
+        results[screener_file.name] = {
+            "rows": len(filtered_df),
+            "file": output_file,
+            "dataframe": filtered_df,
+        }
 
     return results
 
 
-def run_complete_logic():
-    """Explicit full logic run with Industry enrichment enabled."""
+# ============================================================
+# LEVEL 2: SCREENER x SCREENER
+# ============================================================
 
-    return run_logic_flow(
-        include_industry=True
+def run_level_2(
+    level_1_results: dict[str, dict],
+) -> tuple[pd.DataFrame | None, Path | None]:
+    """Find companies common to all selected Level-1 Screener results."""
+
+    if len(level_1_results) < 2:
+        print("Level 2 skipped: select at least two Screener files.")
+        return None, None
+
+    dataframes = [
+        result["dataframe"]
+        for result in level_1_results.values()
+    ]
+
+    common_keys = set(dataframes[0]["company_name"].map(normalize_company_name))
+
+    for df in dataframes[1:]:
+        current_keys = set(df["company_name"].map(normalize_company_name))
+        common_keys &= current_keys
+
+    # Use the first Level-1 dataframe as the source for all columns.
+    first_df = dataframes[0].copy()
+    first_df["comparison_key"] = first_df["company_name"].map(
+        normalize_company_name
     )
 
+    common_df = first_df[
+        first_df["comparison_key"].isin(common_keys)
+    ].copy()
+
+    common_df = common_df.drop(columns=["comparison_key"])
+
+    level_2_dir = COMPARISON_DIR / "level_2_screener_intersection"
+    level_2_dir.mkdir(parents=True, exist_ok=True)
+
+    output_file = level_2_dir / "common_across_selected_screens.csv"
+
+    common_df.to_csv(
+        output_file,
+        index=False,
+        encoding="utf-8-sig",
+    )
+
+    print(
+        f"Level 2 | selected Screener files={len(dataframes)} | "
+        f"Common companies={len(common_df)}"
+    )
+
+    return common_df, output_file
+
 
 # ============================================================
-# ENTRY POINT
+# MAIN COMPARISON RUNNER
 # ============================================================
+
+def run_comparison(
+    scanx_file: Path,
+    screener_files: list[Path],
+) -> dict:
+    """Run Level 1 and, when possible, Level 2 comparison."""
+
+    if not scanx_file.exists():
+        raise FileNotFoundError(f"ScanX file not found: {scanx_file}")
+
+    if not screener_files:
+        raise ValueError("No Screener files selected.")
+
+    for file_path in screener_files:
+        if not file_path.exists():
+            raise FileNotFoundError(f"Screener file not found: {file_path}")
+
+    level_1 = run_level_1(
+        scanx_file=scanx_file,
+        screener_files=screener_files,
+    )
+
+    level_2_df, level_2_file = run_level_2(level_1)
+
+    return {
+        "scanx_file": scanx_file,
+        "level_1": level_1,
+        "level_2_dataframe": level_2_df,
+        "level_2_file": level_2_file,
+    }
+
 
 if __name__ == "__main__":
-
-    run_complete_logic()
+    print("Comparison logic is run from dashboard.py.")

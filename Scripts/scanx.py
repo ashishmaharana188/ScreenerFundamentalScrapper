@@ -1,17 +1,11 @@
 """ScanX company-name scraper.
 
-Purpose
--------
-Build the ScanX custom-screener request for the selected industries/sectors,
-paginate through the ScanX API (25 rows per request), extract company names,
-deduplicate them, validate the pagination, and save a one-column CSV.
-
-No browser automation is required. ScanX's custom screener uses:
-    POST https://ow-scanx-analytics.dhan.co/customscan/v2/fetchdt
-
-Our taxonomy:
-    Industry -> ScanX field: Sector
-    Sector   -> ScanX field: SubSector
+Flow
+----
+1. Dashboard supplies the industries and sectors selected by the user.
+2. This file converts those selections into ScanX's API query format.
+3. The ScanX API is called page by page.
+4. Company names are extracted and saved to scanx_data/.
 """
 
 from __future__ import annotations
@@ -43,47 +37,294 @@ OUTPUT_FILE = OUTPUT_DIR / "scanx_company_names.csv"
 
 
 # ============================================================
-# SELECTED ECONOMIC UNIVERSE
+# ALL INDUSTRIES
 # ============================================================
-# These are the 10 industries + 20 sectors selected for the project.
-# ScanX terminology is different, so the request builder maps:
-#     our industry -> ScanX Sector
-#     our sector   -> ScanX SubSector
 
-INDUSTRIES = [
+ALL_INDUSTRIES = [
     "Aerospace & Defense",
-    "Capital Goods",
-    "Power",
-    "Information Technology",
-    "Consumer Goods",
-    "Healthcare",
-    "Financial Services",
     "Automobile & Auto Components",
+    "Automobiles",
+    "Aviation",
+    "Banks",
+    "Beverages",
+    "Cables",
+    "Capital Goods",
+    "Capital Goods - Electrical Equipment",
+    "Capital Markets",
+    "Castings, Forgings & Fastners",
+    "Chemicals",
+    "Commercial Services",
+    "Construction",
+    "Consumer Durables",
+    "Consumer Goods",
+    "Consumer Services",
+    "Diamond, Gems and Jewellery",
+    "Diversified",
+    "Education",
+    "Energy",
+    "Engineering Services",
+    "Financial Services",
+    "FMCG",
+    "Food Products",
+    "Forest Materials",
+    "Healthcare",
+    "Healthcare Services",
+    "Industrial Products",
+    "Information Technology",
+    "Insurance",
+    "Leisure Services",
     "Logistics & Cargo",
+    "Media",
+    "Media Entertainment & Publication",
+    "Metals & Mining",
+    "Oil & Gas",
+    "Packaging",
+    "Petroleum Products",
+    "Power",
+    "Printing & Stationery",
+    "Realty",
+    "Retail",
+    "Services",
+    "Steel",
     "Telecom",
+    "Telecomm Equipment & Infra Services",
+    "Textiles",
+    "Trading",
+    "Transport",
+    "Transport Services",
+    "Utilities",
 ]
 
-SECTORS = [
-    "Aerospace & Defense",
-    "Ship Building",
-    "Heavy Electric Equipment",
-    "Compressors Pumps & Diesel Engines",
-    "Power Generation",
-    "Power Transmission",
-    "Computer Software & Consulting",
-    "Data Processing Services",
-    "Electronics",
-    "Household Appliances",
-    "Pharmaceuticals",
-    "Medical Equipment",
-    "Private Bank",
-    "NBFC",
-    "Auto Components",
+
+# ============================================================
+# ALL SECTORS
+# ============================================================
+
+ALL_SECTORS = [
     "2/3 Wheelers",
+    "AMC Mutual Fund",
+    "Abrasives & Bearings",
+    "Advertising & Media Agencies",
+    "Advertising Agencies",
+    "Aerospace & Defense",
+    "Agricultural Products",
+    "Airline",
+    "Airport & Airport Services",
+    "Aluminium",
+    "Aluminium Copper & Zinc",
+    "Animal Feed",
+    "Auto Components",
+    "Auto Dealer",
+    "BPO / KPO",
+    "Bikes",
+    "Biotechnology",
+    "Breweries & Distilleries",
+    "Cables - Electricals",
+    "Cables - Power",
+    "Carbon Black",
+    "Cars & Utility Vehicles",
+    "Castings & Forgings",
+    "Cement",
+    "Ceramics",
+    "Cigarettes & Tobacco",
+    "Civil Construction",
+    "Coal",
+    "Commercial Vehicles",
+    "Commodity Chemicals",
+    "Composite Textiles",
+    "Compressors Pumps & Diesel Engines",
+    "Computer Software & Consulting",
+    "Construction",
+    "Construction Materials",
+    "Consulting Services",
+    "Consumer Glass",
+    "Copper",
+    "Cotton/Blended",
+    "Cycles",
+    "Dairy Products",
+    "Data Processing Services",
+    "Dealers",
+    "Depository",
+    "Diamond Cutting / Jewellery",
+    "Digital Entertainment",
+    "Distributors",
+    "Diversified - Large",
+    "Diversified FMCG",
+    "Diversified Group",
+    "Diversified Metals",
+    "Diversified Products",
+    "Diversified Retail",
+    "Diversified Services",
+    "Dredging",
+    "Dyes & Pigments",
+    "E-Learning",
+    "E-Retail/ E-Commerce",
+    "E-Services",
+    "Ecommerce",
+    "Edible Oil",
+    "Education",
+    "Electric Equipment",
+    "Electrical Equipment",
+    "Electrodes & Refractories",
+    "Electronic Media",
+    "Electronics",
+    "Engineering",
+    "Equipment & Accessories",
+    "Event Management",
+    "Exchange",
+    "Explosives",
+    "FMCG Products",
+    "Ferro & Silica Manganese",
+    "Fertilizers",
+    "Film Production Distribution",
+    "Finance",
+    "Financial Institution",
+    "Fintech",
+    "Food - Processing - Indian",
+    "Food Products",
+    "Footwear",
+    "Forest Products",
+    "Garments & Apparels",
+    "Gas",
+    "Gas Supplier",
+    "Gems Jewellery & Watches",
+    "General Insurance",
+    "Glass - Industrial",
+    "Granites & Marbles",
+    "Healthcare Service Provider",
+    "Healthcare Technology",
+    "Heavy Electric Equipment",
+    "Holding Company",
+    "Home Furnishing",
+    "Hospital",
+    "Hospitals",
+    "Hotels & Resorts",
+    "Household Appliances",
+    "Household Products",
+    "Houseware",
+    "Housing Finance",
+    "IT - Hardware",
+    "IT Enabled Services",
+    "Industrial Gases",
+    "Industrial Minerals",
+    "Industrial Products",
+    "Insurance Distribution",
+    "Integrated Power Utilities",
+    "Investment Company",
+    "Iron & Steel",
+    "Iron & Steel Products",
+    "Jewellery & Watches",
+    "Jute & Jute Products",
+    "Jute/Yarn Products",
+    "Leather & Leather Products",
+    "Leather Products",
+    "Leisure Products",
+    "Life Insurance",
     "Logistics Solution Provider",
+    "Lubricants",
+    "Manmade Textiles",
+    "Meat Products",
+    "Media & Entertainment",
+    "Media Entertainment & Publication",
+    "Medical Equipment",
+    "Microfinance",
+    "Miscellaneous",
+    "NBFC",
+    "Non - Ferrous Metals",
+    "Non Alcoholic Beverages",
+    "Offshore Operations",
+    "Oil Equipment & Services",
+    "Oil Exploration & Production",
+    "Oil Storage & Transportation",
+    "Other Electrical Equipment",
+    "Other Financial Services",
+    "Other Industrial Products",
+    "Other Utilities",
+    "Packaged Foods",
+    "Packaging",
+    "Paints",
+    "Paper & Paper Products",
+    "Payment Bank",
+    "Personal Care",
+    "Pesticides & Agrochemicals",
+    "Petrochemicals",
+    "Pharmaceuticals",
+    "Pharmacy Retail",
+    "Pig Iron",
+    "Plastic Products",
+    "Plastic Products - Industrial",
+    "Plastics Products",
+    "Plywood Boards & Laminates",
+    "Plywood Boards/ Laminates",
     "Port & Port Services",
+    "Power Distribution",
+    "Power Generation",
+    "Power Trading",
+    "Power Transmission",
+    "Precious Metals",
+    "Print Media",
+    "Printing & Publication",
+    "Printing & Stationery",
+    "Printing Inks",
+    "Private Bank",
+    "Public Sector Bank",
+    "Quick Service Restaurant",
+    "REITs",
+    "RTA",
+    "Railway Wagons",
+    "Rating Services",
+    "Real Estate Investment Trusts (REITs)",
+    "Real Estate Services",
+    "Residential Commercial Projects",
+    "Recreation",
+    "Refineries & Marketing",
+    "Restaurants",
+    "Road Assets - Toll Annuity Hybrid-Annuity",
+    "Road Transport",
+    "Rubber",
+    "Rubber Products",
+    "Sanitary Ware",
+    "Seafood",
+    "Ship Building",
+    "Shipping",
+    "Small Finance Bank",
+    "Software Products",
+    "Speciality Retail",
+    "Specialty Chemicals",
+    "Spinning - Synthetic / Blended",
+    "Sponge Iron",
+    "Stationary",
+    "Steel - Medium / Small",
+    "Stock Broking",
+    "Sugar",
+    "TV Broadcasting & Media",
+    "Tea & Coffee",
     "Telecom Infrastructure",
+    "Telecom Service Provider",
     "Telecom Services",
+    "Textile Processing",
+    "Textile Products",
+    "Textile Trading",
+    "Textiles & Apparels",
+    "Textiles - Products",
+    "Toll Road Assets",
+    "Tour & Travel",
+    "Tractors",
+    "Trading",
+    "Trading & Distributors",
+    "Trading Chemicals",
+    "Trading Coal",
+    "Trading Gas",
+    "Trading Metals",
+    "Trading Minerals",
+    "Transmisson Line Towers / Equipment",
+    "Transport Services",
+    "Tyres",
+    "Waste Management",
+    "Water Supply & Management",
+    "Wealth",
+    "Wellness",
+    "Zinc",
 ]
 
 
@@ -119,7 +360,7 @@ def create_session() -> requests.Session:
 # ============================================================
 
 def make_or_params(field: str, values: list[str]) -> dict[str, Any]:
-    """Create ScanX OR conditions for one field."""
+    """Turn a list of selected values into ScanX OR conditions."""
 
     return {
         "logic_op": "OR",
@@ -134,17 +375,36 @@ def make_or_params(field: str, values: list[str]) -> dict[str, Any]:
     }
 
 
-def build_query() -> dict[str, Any]:
-    """Build the exact query structure observed in ScanX."""
+def build_query(
+    industries: list[str],
+    sectors: list[str],
+) -> dict[str, Any]:
+    """Build the ScanX query from the user's dashboard selections."""
 
-    if len(INDUSTRIES) != 10:
+    industries = [value.strip() for value in industries if value.strip()]
+    sectors = [value.strip() for value in sectors if value.strip()]
+
+    if not industries:
+        raise ValueError("Select at least one industry.")
+
+    if not sectors:
+        raise ValueError("Select at least one sector.")
+
+    invalid_industries = [
+        value for value in industries if value not in ALL_INDUSTRIES
+    ]
+    invalid_sectors = [
+        value for value in sectors if value not in ALL_SECTORS
+    ]
+
+    if invalid_industries:
         raise ValueError(
-            f"Expected 10 industries, found {len(INDUSTRIES)}"
+            f"Unknown ScanX industries: {invalid_industries}"
         )
 
-    if len(SECTORS) != 20:
+    if invalid_sectors:
         raise ValueError(
-            f"Expected 20 sectors, found {len(SECTORS)}"
+            f"Unknown ScanX sectors: {invalid_sectors}"
         )
 
     return {
@@ -155,8 +415,8 @@ def build_query() -> dict[str, Any]:
                 "op": "eq",
                 "val": "NSE",
             },
-            make_or_params("Sector", INDUSTRIES),
-            make_or_params("SubSector", SECTORS),
+            make_or_params("Sector", industries),
+            make_or_params("SubSector", sectors),
             {
                 "field": "OgInst",
                 "op": "eq",
@@ -171,8 +431,12 @@ def build_query() -> dict[str, Any]:
     }
 
 
-def build_payload(page_number: int) -> dict[str, Any]:
-    """Build one paginated ScanX POST body."""
+def build_payload(
+    page_number: int,
+    industries: list[str],
+    sectors: list[str],
+) -> dict[str, Any]:
+    """Build the request body for one ScanX page."""
 
     if page_number < 1:
         raise ValueError("page_number must be >= 1")
@@ -181,7 +445,7 @@ def build_payload(page_number: int) -> dict[str, Any]:
         "data": {
             "count": PAGE_SIZE,
             "pgno": page_number,
-            "query": build_query(),
+            "query": build_query(industries, sectors),
             "sorder": "desc",
             "sort": "Mcap",
         }
@@ -195,10 +459,16 @@ def build_payload(page_number: int) -> dict[str, Any]:
 def post_page(
     session: requests.Session,
     page_number: int,
+    industries: list[str],
+    sectors: list[str],
 ) -> dict[str, Any]:
     """POST one ScanX page with retry handling."""
 
-    payload = build_payload(page_number)
+    payload = build_payload(
+        page_number=page_number,
+        industries=industries,
+        sectors=sectors,
+    )
 
     for attempt in range(MAX_RETRIES):
         try:
@@ -250,23 +520,10 @@ def post_page(
 # RESPONSE EXTRACTION
 # ============================================================
 
-def extract_company_rows(response_json: dict[str, Any]) -> tuple[list[dict[str, Any]], int | None, int | None]:
-    """Extract rows and pagination metadata from ScanX fetchdt response.
-
-    Captured ScanX response schema:
-
-        {
-            "code": 0,
-            "remarks": "",
-            "tot_rec": 439,
-            "tot_pg": 18,
-            "data": [[...], [...]],
-            "headers": ["Exch", "Sid", ...]
-        }
-
-    Returns:
-        rows, total_records, total_pages
-    """
+def extract_company_rows(
+    response_json: dict[str, Any],
+) -> tuple[list[dict[str, Any]], int | None, int | None]:
+    """Extract rows and pagination metadata from a ScanX response."""
 
     if not isinstance(response_json, dict):
         raise ValueError(
@@ -329,7 +586,7 @@ def extract_company_rows(response_json: dict[str, Any]) -> tuple[list[dict[str, 
 
 
 def extract_company_name(row: dict[str, Any]) -> str | None:
-    """Extract the ScanX displayed company name from a normalized row."""
+    """Take the displayed ScanX company name from one row."""
 
     value = row.get("DispSym")
 
@@ -346,6 +603,8 @@ def extract_company_name(row: dict[str, Any]) -> str | None:
 
 def scrape_company_names(
     session: requests.Session,
+    industries: list[str],
+    sectors: list[str],
 ) -> list[str]:
     """Fetch every ScanX page and return distinct company names."""
 
@@ -356,7 +615,13 @@ def scrape_company_names(
     expected_pages: int | None = None
 
     while True:
-        response_json = post_page(session, page)
+        response_json = post_page(
+            session=session,
+            page_number=page,
+            industries=industries,
+            sectors=sectors,
+        )
+
         rows, total_records, total_pages = extract_company_rows(response_json)
 
         if expected_total is None:
@@ -405,11 +670,9 @@ def scrape_company_names(
             f"distinct collected={len(names)}/{total_text}"
         )
 
-        # Prefer the API's explicit total-page metadata.
         if expected_pages is not None and page >= expected_pages:
             break
 
-        # Fallback if total-page metadata is absent.
         if expected_pages is None and len(rows) < PAGE_SIZE:
             break
 
@@ -430,7 +693,10 @@ def scrape_company_names(
 # SAVE
 # ============================================================
 
-def save_company_names(names: list[str], file_path: Path = OUTPUT_FILE) -> None:
+def save_company_names(
+    names: list[str],
+    file_path: Path = OUTPUT_FILE,
+) -> Path:
     """Save one company_name column to CSV."""
 
     file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -448,24 +714,29 @@ def save_company_names(names: list[str], file_path: Path = OUTPUT_FILE) -> None:
     print(f"Saved: {file_path.resolve()}")
     print(f"Rows written: {len(names)}")
 
+    return file_path
+
 
 # ============================================================
-# MAIN
+# PUBLIC RUN FUNCTION
 # ============================================================
 
-def main() -> None:
+def run_scan(
+    industries: list[str],
+    sectors: list[str],
+) -> list[str]:
+    """Run one ScanX scrape using the dashboard's selections."""
+
     print("========================================")
     print("SCANX SCRAPER")
     print("========================================")
-    print(f"Industries: {len(INDUSTRIES)}")
-    print(f"Sectors:    {len(SECTORS)}")
-    print(f"Page size:  {PAGE_SIZE}")
+    print(f"Industries selected: {len(industries)}")
+    print(f"Sectors selected:    {len(sectors)}")
+    print(f"Page size:           {PAGE_SIZE}")
     print()
 
     session = create_session()
 
-    # A GET is not required for the data call, but doing one first gives the
-    # session normal ScanX cookies if the site sets any on the entry page.
     try:
         entry_response = session.get(
             ENTRY_URL,
@@ -473,23 +744,34 @@ def main() -> None:
         )
         entry_response.raise_for_status()
         print(f"Entry page: HTTP {entry_response.status_code}")
-    except requests.RequestException as exc:
-        raise RuntimeError(
-            f"Could not open ScanX entry page: {exc}"
-        ) from exc
 
-    names = scrape_company_names(session)
+        names = scrape_company_names(
+            session=session,
+            industries=industries,
+            sectors=sectors,
+        )
 
-    if not names:
-        raise RuntimeError("ScanX returned no company names.")
+        if not names:
+            raise RuntimeError("ScanX returned no company names.")
 
-    save_company_names(names)
+        save_company_names(names)
 
-    print("\n========================================")
-    print("SCANX SCRAPER COMPLETE")
-    print("========================================")
-    print(f"Distinct company names: {len(names)}")
+        print("\n========================================")
+        print("SCANX SCRAPER COMPLETE")
+        print("========================================")
+        print(f"Distinct company names: {len(names)}")
 
+        return names
+
+    finally:
+        session.close()
+
+
+# ============================================================
+# DIRECT SCRIPT ENTRY
+# ============================================================
 
 if __name__ == "__main__":
-    main()
+    raise RuntimeError(
+        "Run ScanX from dashboard.py so industries and sectors can be selected."
+    )
