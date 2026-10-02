@@ -14,20 +14,68 @@ companies appear in a fixed set of screens.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
+from datetime import datetime
 
 import pandas as pd
 
 
 # ============================================================
-# DIRECTORIES
+# STORAGE RESOLUTION
+# ============================================================
+#
+# Local:
+#     APP_STORAGE_ROOT is normally unset.
+#     Project root is used.
+#
+# Render:
+#     APP_STORAGE_ROOT=/var/data
+#     Persistent disk becomes the storage root.
+#
+# The fallback intentionally reads APP_STORAGE_ROOT itself so Render
+# still works even if storage.py is not importable from Scripts/.
 # ============================================================
 
-BASE_DATA_DIR = Path("screener_data")
-GROUPS_DIR = BASE_DATA_DIR / "groups"
-COMPARISON_DIR = BASE_DATA_DIR / "comparison"
-SCANX_DIR = Path("scanx_data")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+_ENV_STORAGE_ROOT = os.getenv("APP_STORAGE_ROOT", "").strip()
+
+if _ENV_STORAGE_ROOT:
+    STORAGE_ROOT = Path(_ENV_STORAGE_ROOT).expanduser().resolve()
+else:
+    STORAGE_ROOT = PROJECT_ROOT.resolve()
+
+
+try:
+    from storage import (
+        STORAGE_ROOT as _CENTRAL_STORAGE_ROOT,
+        GROUPS_DIR as _CENTRAL_GROUPS_DIR,
+        COMPARISON_DIR as _CENTRAL_COMPARISON_DIR,
+        SCANX_DIR as _CENTRAL_SCANX_DIR,
+    )
+
+    # storage.py is the source of truth when it is importable and its
+    # root matches the environment configuration.
+    GROUPS_DIR = _CENTRAL_GROUPS_DIR
+    COMPARISON_DIR = _CENTRAL_COMPARISON_DIR
+    SCANX_DIR = _CENTRAL_SCANX_DIR
+
+except ImportError:
+    BASE_DATA_DIR = STORAGE_ROOT / "screener_data"
+    GROUPS_DIR = BASE_DATA_DIR / "groups"
+    COMPARISON_DIR = BASE_DATA_DIR / "comparison"
+    SCANX_DIR = STORAGE_ROOT / "scanx_data"
+
+
+# Preserve compatibility with files created by the older relative-path
+# implementation during local development. Only enabled when Render
+# storage has not explicitly been selected.
+LEGACY_SCANX_DIR = (Path.cwd() / "scanx_data").resolve()
+LEGACY_GROUPS_DIR = (
+    Path.cwd() / "screener_data" / "groups"
+).resolve()
 
 
 # ============================================================
@@ -49,30 +97,60 @@ def normalize_company_name(value) -> str:
 # FILE DISCOVERY
 # ============================================================
 
-def get_scanx_files() -> list[Path]:
-    """Return all CSV files currently available in scanx_data/."""
+def _unique_csv_files(
+    directories: list[Path],
+) -> list[Path]:
+    """Return unique CSV files from the supplied directories."""
+    files_by_path: dict[str, Path] = {}
 
-    if not SCANX_DIR.exists():
-        return []
+    for directory in directories:
+        if not directory.exists() or not directory.is_dir():
+            continue
+
+        for path in directory.glob("*.csv"):
+            if not path.is_file():
+                continue
+
+            resolved = path.resolve()
+            files_by_path[str(resolved).lower()] = resolved
 
     return sorted(
-        path
-        for path in SCANX_DIR.glob("*.csv")
-        if path.is_file()
+        files_by_path.values(),
+        key=lambda path: (
+            path.name.lower(),
+            str(path).lower(),
+        ),
     )
+
+
+def get_scanx_files() -> list[Path]:
+    """
+    Return available ScanX CSV files.
+
+    Local development also checks the legacy cwd-based directory so files
+    created before storage.py was introduced remain visible.
+    """
+    directories = [SCANX_DIR]
+
+    if not _ENV_STORAGE_ROOT:
+        directories.append(LEGACY_SCANX_DIR)
+
+    return _unique_csv_files(directories)
 
 
 def get_screener_files() -> list[Path]:
-    """Return all CSV files currently available in screener_data/groups/."""
+    """
+    Return available Screener CSV files.
 
-    if not GROUPS_DIR.exists():
-        return []
+    Local development also checks the legacy cwd-based directory so files
+    created before storage.py was introduced remain visible.
+    """
+    directories = [GROUPS_DIR]
 
-    return sorted(
-        path
-        for path in GROUPS_DIR.glob("*.csv")
-        if path.is_file()
-    )
+    if not _ENV_STORAGE_ROOT:
+        directories.append(LEGACY_GROUPS_DIR)
+
+    return _unique_csv_files(directories)
 
 
 # ============================================================
@@ -80,18 +158,68 @@ def get_screener_files() -> list[Path]:
 # ============================================================
 
 def load_scanx_company_names(file_path: Path) -> pd.DataFrame:
-    """Load one ScanX CSV and validate its company_name column."""
+    """
+    Load one ScanX CSV.
+
+    ScanX now stores:
+        company_name
+        industry
+        sector
+
+    Industry and sector are retained so they can be attached to
+    the final comparison results.
+    """
 
     df = pd.read_csv(file_path)
 
+    # Strip accidental whitespace in CSV headers.
+    df.columns = [
+        str(column).strip()
+        for column in df.columns
+    ]
+
+    # company_name is the only field required for comparison.
+    # industry/sector are optional so older ScanX exports remain usable.
     if "company_name" not in df.columns:
         raise ValueError(
             f"ScanX file is missing 'company_name': {file_path}"
         )
 
-    df = df[["company_name"]].copy()
-    df["comparison_key"] = df["company_name"].map(normalize_company_name)
-    df = df[df["comparison_key"] != ""].drop_duplicates("comparison_key")
+    for column in ("industry", "sector"):
+        if column not in df.columns:
+            df[column] = ""
+
+    df = df[
+        [
+            "company_name",
+            "industry",
+            "sector",
+        ]
+    ].copy()
+
+    df["industry"] = (
+        df["industry"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+
+    df["sector"] = (
+        df["sector"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+
+    df["comparison_key"] = (
+        df["company_name"]
+        .map(normalize_company_name)
+    )
+
+    df = (
+        df[df["comparison_key"] != ""]
+        .drop_duplicates("comparison_key")
+    )
 
     return df
 
@@ -100,6 +228,11 @@ def load_screener_file(file_path: Path) -> pd.DataFrame:
     """Load one saved Screener result CSV."""
 
     df = pd.read_csv(file_path)
+
+    df.columns = [
+        str(column).strip()
+        for column in df.columns
+    ]
 
     if "company_name" not in df.columns:
         raise ValueError(
@@ -127,6 +260,45 @@ def make_safe_filename(name: str) -> str:
     return filename or "comparison"
 
 
+def _comparison_output_path(
+    directory: Path,
+    filename: str,
+) -> Path:
+    """
+    Return a writable comparison filename.
+
+    Windows can reject an overwrite when the previous CSV is open in
+    Excel or another application. It can also reject excessively long
+    paths. When the deterministic filename already exists, create a
+    timestamped sibling instead of failing the entire comparison.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+
+    candidate = directory / filename
+
+    try:
+        path_length = len(str(candidate.resolve()))
+    except OSError:
+        path_length = len(str(candidate))
+
+    if not candidate.exists() and path_length < 230:
+        return candidate
+
+    stem = candidate.stem[:90].rstrip("_")
+    suffix = candidate.suffix or ".csv"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    fallback = directory / f"{stem}_{timestamp}{suffix}"
+
+    counter = 1
+    while fallback.exists():
+        fallback = directory / (
+            f"{stem}_{timestamp}_{counter}{suffix}"
+        )
+        counter += 1
+
+    return fallback
+
+
 # ============================================================
 # LEVEL 1: SCANX x SCREENER
 # ============================================================
@@ -146,18 +318,79 @@ def compare_scanx_with_screener(
         screener_df["comparison_key"].isin(scanx_keys)
     ].copy()
 
-    # comparison_key is internal only and should not appear in the result.
-    filtered = filtered.drop(columns=["comparison_key"])
+    # Attach ScanX taxonomy to the matched Screener companies.
+    scanx_metadata = (
+        scanx_df[
+            [
+                "comparison_key",
+                "industry",
+                "sector",
+            ]
+        ]
+        .rename(
+            columns={
+                "industry": "scanx_industry",
+                "sector": "scanx_sector",
+            }
+        )
+        .copy()
+    )
+
+    filtered = filtered.merge(
+        scanx_metadata,
+        on="comparison_key",
+        how="left",
+    )
+
+    # ScanX is authoritative for these two taxonomy columns.
+    if "industry" in filtered.columns:
+        filtered["industry"] = (
+            filtered["scanx_industry"]
+            .where(
+                filtered["scanx_industry"].ne(""),
+                filtered["industry"].fillna(""),
+            )
+        )
+    else:
+        filtered["industry"] = (
+            filtered["scanx_industry"].fillna("")
+        )
+
+    if "sector" in filtered.columns:
+        filtered["sector"] = (
+            filtered["scanx_sector"]
+            .where(
+                filtered["scanx_sector"].ne(""),
+                filtered["sector"].fillna(""),
+            )
+        )
+    else:
+        filtered["sector"] = (
+            filtered["scanx_sector"].fillna("")
+        )
+
+    filtered = filtered.drop(
+        columns=[
+            "comparison_key",
+            "scanx_industry",
+            "scanx_sector",
+        ]
+    )
 
     level_1_dir = COMPARISON_DIR / "level_1_scanx_vs_screener"
     level_1_dir.mkdir(parents=True, exist_ok=True)
 
-    output_file = level_1_dir / (
+    output_filename = (
         f"scanx_vs_{make_safe_filename(screener_file.name)}"
     )
 
-    if output_file.suffix.lower() != ".csv":
-        output_file = output_file.with_suffix(".csv")
+    if not output_filename.lower().endswith(".csv"):
+        output_filename += ".csv"
+
+    output_file = _comparison_output_path(
+        level_1_dir,
+        output_filename,
+    )
 
     filtered.to_csv(
         output_file,
@@ -240,7 +473,10 @@ def run_level_2(
     level_2_dir = COMPARISON_DIR / "level_2_screener_intersection"
     level_2_dir.mkdir(parents=True, exist_ok=True)
 
-    output_file = level_2_dir / "common_across_selected_screens.csv"
+    output_file = _comparison_output_path(
+        level_2_dir,
+        "common_across_selected_screens.csv",
+    )
 
     common_df.to_csv(
         output_file,
@@ -267,10 +503,17 @@ def run_comparison(
     """Run Level 1 and, when possible, Level 2 comparison."""
 
     if not scanx_file.exists():
-        raise FileNotFoundError(f"ScanX file not found: {scanx_file}")
+        raise FileNotFoundError(
+            f"ScanX file not found: {scanx_file}"
+        )
 
     if not screener_files:
         raise ValueError("No Screener files selected.")
+
+    # Ensure the active storage tree exists.
+    GROUPS_DIR.mkdir(parents=True, exist_ok=True)
+    COMPARISON_DIR.mkdir(parents=True, exist_ok=True)
+    SCANX_DIR.mkdir(parents=True, exist_ok=True)
 
     for file_path in screener_files:
         if not file_path.exists():

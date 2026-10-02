@@ -410,14 +410,13 @@ def build_query(
             "op": "eq",
             "val": "NSE",
         },
-        # ScanX calls the industry dimension "Sector".
         make_or_params("Sector", industries),
     ]
 
-    # ScanX calls the user-facing sector dimension "SubSector".
-    # It is optional. When no sectors are selected, do not add a
-    # restrictive SubSector filter, which means all subsectors under
-    # the selected industries are returned.
+    # User-facing Sector maps to ScanX SubSector.
+    # It is optional. When no sectors are selected, no SubSector
+    # filter is sent, so all subsectors within the selected industries
+    # are included.
     if sectors:
         params.append(
             make_or_params("SubSector", sectors)
@@ -458,6 +457,11 @@ def build_payload(
         "data": {
             "count": PAGE_SIZE,
             "pgno": page_number,
+            "fields": [
+                "DispSym",
+                "Sector",
+                "SubSector",
+            ],
             "query": build_query(industries, sectors),
             "sorder": "desc",
             "sort": "Mcap",
@@ -598,16 +602,46 @@ def extract_company_rows(
     return extracted, total_records, total_pages
 
 
-def extract_company_name(row: dict[str, Any]) -> str | None:
-    """Take the displayed ScanX company name from one row."""
+def extract_company_record(
+    row: dict[str, Any],
+) -> dict[str, str] | None:
+    """
+    Extract the company and ScanX taxonomy values from one row.
 
-    value = row.get("DispSym")
+    ScanX field mapping:
+        Sector    -> user-facing industry
+        SubSector -> user-facing sector
+    """
 
-    if value is None:
+    company_value = row.get("DispSym")
+
+    if company_value is None:
         return None
 
-    name = str(value).strip()
-    return name or None
+    company_name = str(company_value).strip()
+
+    if not company_name:
+        return None
+
+    industry = str(row.get("Sector") or "").strip()
+    sector = str(row.get("SubSector") or "").strip()
+
+    return {
+        "company_name": company_name,
+        "industry": industry,
+        "sector": sector,
+    }
+
+
+def extract_company_name(row: dict[str, Any]) -> str | None:
+    """Backward-compatible company-name extraction."""
+
+    record = extract_company_record(row)
+
+    if record is None:
+        return None
+
+    return record["company_name"]
 
 
 # ============================================================
@@ -618,12 +652,19 @@ def scrape_company_names(
     session: requests.Session,
     industries: list[str],
     sectors: list[str],
-) -> list[str]:
-    """Fetch every ScanX page and return distinct company names."""
+) -> list[dict[str, str]]:
+    """
+    Fetch every ScanX page and return distinct companies with taxonomy.
+
+    Each record contains:
+        company_name
+        industry
+        sector
+    """
 
     page = 1
-    names: list[str] = []
-    seen_names: set[str] = set()
+    records: list[dict[str, str]] = []
+    record_index: dict[str, int] = {}
     expected_total: int | None = None
     expected_pages: int | None = None
 
@@ -635,7 +676,9 @@ def scrape_company_names(
             sectors=sectors,
         )
 
-        rows, total_records, total_pages = extract_company_rows(response_json)
+        rows, total_records, total_pages = extract_company_rows(
+            response_json
+        )
 
         if expected_total is None:
             expected_total = total_records
@@ -653,17 +696,32 @@ def scrape_company_names(
                 f"total_records={expected_total}."
             )
 
-        new_names = 0
+        new_companies = 0
 
         for row in rows:
-            name = extract_company_name(row)
-            if not name:
+            record = extract_company_record(row)
+
+            if record is None:
                 continue
 
-            if name not in seen_names:
-                seen_names.add(name)
-                names.append(name)
-                new_names += 1
+            company_name = record["company_name"]
+            existing_index = record_index.get(company_name)
+
+            if existing_index is None:
+                record_index[company_name] = len(records)
+                records.append(record)
+                new_companies += 1
+                continue
+
+            # Preserve the first value, but fill blanks from a later
+            # occurrence if ScanX returns incomplete metadata.
+            existing = records[existing_index]
+
+            if not existing["industry"] and record["industry"]:
+                existing["industry"] = record["industry"]
+
+            if not existing["sector"] and record["sector"]:
+                existing["sector"] = record["sector"]
 
         page_text = (
             f"{page}/{expected_pages}"
@@ -679,8 +737,8 @@ def scrape_company_names(
 
         print(
             f"Page {page_text}: API rows={len(rows)} | "
-            f"new companies={new_names} | "
-            f"distinct collected={len(names)}/{total_text}"
+            f"new companies={new_companies} | "
+            f"distinct collected={len(records)}/{total_text}"
         )
 
         if expected_pages is not None and page >= expected_pages:
@@ -692,14 +750,14 @@ def scrape_company_names(
         page += 1
         time.sleep(REQUEST_DELAY)
 
-    if expected_total is not None and len(names) != expected_total:
+    if expected_total is not None and len(records) != expected_total:
         raise RuntimeError(
             "ScanX pagination validation failed: "
             f"expected {expected_total} records, "
-            f"collected {len(names)} distinct company names."
+            f"collected {len(records)} distinct companies."
         )
 
-    return names
+    return records
 
 
 # ============================================================
@@ -707,10 +765,17 @@ def scrape_company_names(
 # ============================================================
 
 def save_company_names(
-    names: list[str],
+    records: list[dict[str, str]],
     file_path: Path = OUTPUT_FILE,
 ) -> Path:
-    """Save one company_name column to CSV."""
+    """
+    Save the ScanX universe with taxonomy columns.
+
+    Output columns:
+        company_name
+        industry
+        sector
+    """
 
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -719,13 +784,28 @@ def save_company_names(
         newline="",
         encoding="utf-8-sig",
     ) as file:
-        writer = csv.writer(file)
-        writer.writerow(["company_name"])
-        for name in names:
-            writer.writerow([name])
+        writer = csv.DictWriter(
+            file,
+            fieldnames=[
+                "company_name",
+                "industry",
+                "sector",
+            ],
+        )
+
+        writer.writeheader()
+
+        for record in records:
+            writer.writerow(
+                {
+                    "company_name": record.get("company_name", ""),
+                    "industry": record.get("industry", ""),
+                    "sector": record.get("sector", ""),
+                }
+            )
 
     print(f"Saved: {file_path.resolve()}")
-    print(f"Rows written: {len(names)}")
+    print(f"Rows written: {len(records)}")
 
     return file_path
 
@@ -758,16 +838,21 @@ def run_scan(
         entry_response.raise_for_status()
         print(f"Entry page: HTTP {entry_response.status_code}")
 
-        names = scrape_company_names(
+        records = scrape_company_names(
             session=session,
             industries=industries,
             sectors=sectors,
         )
 
-        if not names:
+        if not records:
             raise RuntimeError("ScanX returned no company names.")
 
-        save_company_names(names)
+        save_company_names(records)
+
+        names = [
+            record["company_name"]
+            for record in records
+        ]
 
         print("\n========================================")
         print("SCANX SCRAPER COMPLETE")
