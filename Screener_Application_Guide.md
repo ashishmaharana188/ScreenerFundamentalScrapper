@@ -16,15 +16,18 @@ The application works in this order:
 ## 2. ScanX
 
 ### Industry
+
 - Industry is required.
 - One or more industries can be selected.
 
 ### Sector
+
 - Sector is optional.
 - No sector selected = all sectors inside the selected industries.
 - Sector selected = only the selected sectors.
 
 ### Output
+
 ScanX saves company data as CSV.
 
 ---
@@ -53,6 +56,7 @@ The hierarchy is:
 **GROUP → SUBGROUP → ITEM**
 
 ### Group
+
 The group is created from the **first meaningful word** in the screen title.
 
 Example:
@@ -78,6 +82,7 @@ VALUATION UNDERVALUED
 Common filler words such as `and`, `or`, `the`, `of`, `for`, `in`, `on`, `to`, and `with` are ignored when finding the first meaningful word.
 
 ### Subgroup
+
 The subgroup is the **complete screen title**.
 
 Example:
@@ -90,6 +95,7 @@ QUALITY
 ```
 
 ### Item
+
 The item is the actual Screener screen.
 
 Its display label is:
@@ -103,14 +109,17 @@ TITLE | DESCRIPTION
 ## 5. Group Types
 
 ### SINGLE
+
 Only one screen exists in the group.
 
 ### PACK
+
 All screens in the group have the same non-empty description.
 
 The complete pack can be treated as one ready-made group.
 
 ### NORMAL
+
 The group contains screens with different descriptions.
 
 The user can select the required screens.
@@ -120,14 +129,17 @@ The user can select the required screens.
 ## 6. Running Screener Screens
 
 ### Single Mode
+
 Run one selected screen.
 
 ### Merge Mode
+
 Select multiple screens and combine their results.
 
 The application keeps the companies from the selected screens and records their screen sources.
 
 ### Pack Mode
+
 Run the complete detected pack.
 
 No screen names are manually entered into the code.
@@ -212,7 +224,7 @@ FINAL CSV
 
 ## 9. One Rule to Remember
 
-**ScanX decides the universe.  
+**ScanX decides the Sector/Industry.  
 Screener decides the tests.  
 The application organizes the tests.  
 Comparison finds the companies that survive all selected filters.**
