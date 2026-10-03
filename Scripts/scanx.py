@@ -14,10 +14,11 @@ import csv
 import json
 import time
 from pathlib import Path
-from storage import SCANX_DIR, upload_file
 from typing import Any
 
 import requests
+
+from storage import SCANX_DIR, upload_file
 
 
 # ============================================================
@@ -30,6 +31,7 @@ API_URL = "https://ow-scanx-analytics.dhan.co/customscan/v2/fetchdt"
 PAGE_SIZE = 25
 REQUEST_DELAY = 0.35
 REQUEST_TIMEOUT = 30
+
 MAX_RETRIES = 4
 RETRY_DELAYS = (2, 5, 10, 20)
 
@@ -360,7 +362,10 @@ def create_session() -> requests.Session:
 # QUERY BUILDING
 # ============================================================
 
-def make_or_params(field: str, values: list[str]) -> dict[str, Any]:
+def make_or_params(
+    field: str,
+    values: list[str],
+) -> dict[str, Any]:
     """Turn a list of selected values into ScanX OR conditions."""
 
     return {
@@ -380,19 +385,35 @@ def build_query(
     industries: list[str],
     sectors: list[str],
 ) -> dict[str, Any]:
-    """Build the ScanX query from the user's dashboard selections."""
+    """Build the ScanX query from dashboard selections."""
 
-    industries = [value.strip() for value in industries if value.strip()]
-    sectors = [value.strip() for value in sectors if value.strip()]
+    industries = [
+        value.strip()
+        for value in industries
+        if value.strip()
+    ]
+
+    sectors = [
+        value.strip()
+        for value in sectors
+        if value.strip()
+    ]
 
     if not industries:
-        raise ValueError("Select at least one industry.")
+        raise ValueError(
+            "Select at least one industry."
+        )
 
     invalid_industries = [
-        value for value in industries if value not in ALL_INDUSTRIES
+        value
+        for value in industries
+        if value not in ALL_INDUSTRIES
     ]
+
     invalid_sectors = [
-        value for value in sectors if value not in ALL_SECTORS
+        value
+        for value in sectors
+        if value not in ALL_SECTORS
     ]
 
     if invalid_industries:
@@ -411,16 +432,24 @@ def build_query(
             "op": "eq",
             "val": "NSE",
         },
-        make_or_params("Sector", industries),
+        make_or_params(
+            "Sector",
+            industries,
+        ),
     ]
 
     # User-facing Sector maps to ScanX SubSector.
-    # It is optional. When no sectors are selected, no SubSector
-    # filter is sent, so all subsectors within the selected industries
-    # are included.
+    #
+    # If no sectors are selected, no SubSector filter
+    # is sent, so all subsectors inside the selected
+    # industries are included.
+
     if sectors:
         params.append(
-            make_or_params("SubSector", sectors)
+            make_or_params(
+                "SubSector",
+                sectors,
+            )
         )
 
     params.extend(
@@ -452,7 +481,9 @@ def build_payload(
     """Build the request body for one ScanX page."""
 
     if page_number < 1:
-        raise ValueError("page_number must be >= 1")
+        raise ValueError(
+            "page_number must be >= 1"
+        )
 
     return {
         "data": {
@@ -463,7 +494,10 @@ def build_payload(
                 "Sector",
                 "SubSector",
             ],
-            "query": build_query(industries, sectors),
+            "query": build_query(
+                industries,
+                sectors,
+            ),
             "sorder": "desc",
             "sort": "Mcap",
         }
@@ -489,49 +523,81 @@ def post_page(
     )
 
     for attempt in range(MAX_RETRIES):
+
         try:
+
             response = session.post(
                 API_URL,
                 json=payload,
                 timeout=REQUEST_TIMEOUT,
             )
 
-            if response.status_code == 429 or response.status_code >= 500:
+            if (
+                response.status_code == 429
+                or response.status_code >= 500
+            ):
+
                 if attempt == MAX_RETRIES - 1:
                     response.raise_for_status()
 
-                delay = RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)]
+                delay = RETRY_DELAYS[
+                    min(
+                        attempt,
+                        len(RETRY_DELAYS) - 1,
+                    )
+                ]
+
                 print(
-                    f"Page {page_number}: HTTP {response.status_code}; "
+                    f"Page {page_number}: "
+                    f"HTTP {response.status_code}; "
                     f"retrying in {delay}s..."
                 )
+
                 time.sleep(delay)
                 continue
 
             response.raise_for_status()
 
             data = response.json()
+
             if not isinstance(data, dict):
                 raise ValueError(
-                    f"Unexpected API response type: {type(data).__name__}"
+                    "Unexpected API response type: "
+                    f"{type(data).__name__}"
                 )
 
             return data
 
-        except (requests.RequestException, ValueError, json.JSONDecodeError) as exc:
+        except (
+            requests.RequestException,
+            ValueError,
+            json.JSONDecodeError,
+        ) as exc:
+
             if attempt == MAX_RETRIES - 1:
+
                 raise RuntimeError(
-                    f"ScanX page {page_number} failed after "
-                    f"{MAX_RETRIES} attempts: {exc}"
+                    f"ScanX page {page_number} failed "
+                    f"after {MAX_RETRIES} attempts: {exc}"
                 ) from exc
 
-            delay = RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)]
+            delay = RETRY_DELAYS[
+                min(
+                    attempt,
+                    len(RETRY_DELAYS) - 1,
+                )
+            ]
+
             print(
-                f"Page {page_number}: {exc}; retrying in {delay}s..."
+                f"Page {page_number}: {exc}; "
+                f"retrying in {delay}s..."
             )
+
             time.sleep(delay)
 
-    raise RuntimeError(f"Unable to fetch ScanX page {page_number}")
+    raise RuntimeError(
+        f"Unable to fetch ScanX page {page_number}"
+    )
 
 
 # ============================================================
@@ -540,16 +606,23 @@ def post_page(
 
 def extract_company_rows(
     response_json: dict[str, Any],
-) -> tuple[list[dict[str, Any]], int | None, int | None]:
-    """Extract rows and pagination metadata from a ScanX response."""
+) -> tuple[
+    list[dict[str, Any]],
+    int | None,
+    int | None,
+]:
+    """Extract rows and pagination metadata."""
 
     if not isinstance(response_json, dict):
         raise ValueError(
-            f"Unexpected ScanX response type: {type(response_json).__name__}"
+            "Unexpected ScanX response type: "
+            f"{type(response_json).__name__}"
         )
 
     code = response_json.get("code")
+
     if code not in (None, 0):
+
         raise RuntimeError(
             f"ScanX returned error code {code}: "
             f"{response_json.get('remarks', '')}"
@@ -558,74 +631,131 @@ def extract_company_rows(
     fields = response_json.get("headers")
     rows = response_json.get("data")
 
-    if not isinstance(fields, list) or not all(
-        isinstance(field, str) for field in fields
+    if (
+        not isinstance(fields, list)
+        or not all(
+            isinstance(field, str)
+            for field in fields
+        )
     ):
+
         raise ValueError(
-            "ScanX response does not contain a valid 'headers' list. "
+            "ScanX response does not contain a valid "
+            "'headers' list. "
             f"Keys: {list(response_json.keys())}"
         )
 
     if not isinstance(rows, list):
+
         raise ValueError(
-            "ScanX response does not contain a valid 'data' row list. "
+            "ScanX response does not contain a valid "
+            "'data' row list. "
             f"Keys: {list(response_json.keys())}"
         )
 
     extracted: list[dict[str, Any]] = []
 
     for row in rows:
+
         if not isinstance(row, list):
             continue
 
         if len(row) != len(fields):
+
             print(
-                "WARNING: Skipping ScanX row because the number of values "
-                f"({len(row)}) does not match headers ({len(fields)})."
+                "WARNING: Skipping ScanX row because "
+                f"values ({len(row)}) != "
+                f"headers ({len(fields)})."
             )
+
             continue
 
-        extracted.append(dict(zip(fields, row)))
+        extracted.append(
+            dict(
+                zip(
+                    fields,
+                    row,
+                )
+            )
+        )
 
-    total_records = response_json.get("tot_rec")
-    total_pages = response_json.get("tot_pg")
+    total_records = response_json.get(
+        "tot_rec"
+    )
+
+    total_pages = response_json.get(
+        "tot_pg"
+    )
 
     try:
-        total_records = int(total_records) if total_records is not None else None
-    except (TypeError, ValueError):
+
+        total_records = (
+            int(total_records)
+            if total_records is not None
+            else None
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+
         total_records = None
 
     try:
-        total_pages = int(total_pages) if total_pages is not None else None
-    except (TypeError, ValueError):
+
+        total_pages = (
+            int(total_pages)
+            if total_pages is not None
+            else None
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+
         total_pages = None
 
-    return extracted, total_records, total_pages
+    return (
+        extracted,
+        total_records,
+        total_pages,
+    )
 
 
 def extract_company_record(
     row: dict[str, Any],
 ) -> dict[str, str] | None:
     """
-    Extract the company and ScanX taxonomy values from one row.
+    Extract company and ScanX taxonomy values.
 
-    ScanX field mapping:
-        Sector    -> user-facing industry
-        SubSector -> user-facing sector
+    ScanX:
+        Sector    -> industry
+        SubSector -> sector
     """
 
-    company_value = row.get("DispSym")
+    company_value = row.get(
+        "DispSym"
+    )
 
     if company_value is None:
         return None
 
-    company_name = str(company_value).strip()
+    company_name = str(
+        company_value
+    ).strip()
 
     if not company_name:
         return None
 
-    industry = str(row.get("Sector") or "").strip()
-    sector = str(row.get("SubSector") or "").strip()
+    industry = str(
+        row.get("Sector") or ""
+    ).strip()
+
+    sector = str(
+        row.get("SubSector") or ""
+    ).strip()
 
     return {
         "company_name": company_name,
@@ -634,7 +764,9 @@ def extract_company_record(
     }
 
 
-def extract_company_name(row: dict[str, Any]) -> str | None:
+def extract_company_name(
+    row: dict[str, Any],
+) -> str | None:
     """Backward-compatible company-name extraction."""
 
     record = extract_company_record(row)
@@ -642,7 +774,9 @@ def extract_company_name(row: dict[str, Any]) -> str | None:
     if record is None:
         return None
 
-    return record["company_name"]
+    return record[
+        "company_name"
+    ]
 
 
 # ============================================================
@@ -655,21 +789,31 @@ def scrape_company_names(
     sectors: list[str],
 ) -> list[dict[str, str]]:
     """
-    Fetch every ScanX page and return distinct companies with taxonomy.
+    Fetch every ScanX page.
 
-    Each record contains:
+    Returns distinct companies with:
+
         company_name
         industry
         sector
     """
 
     page = 1
-    records: list[dict[str, str]] = []
-    record_index: dict[str, int] = {}
+
+    records: list[
+        dict[str, str]
+    ] = []
+
+    record_index: dict[
+        str,
+        int,
+    ] = {}
+
     expected_total: int | None = None
     expected_pages: int | None = None
 
     while True:
+
         response_json = post_page(
             session=session,
             page_number=page,
@@ -677,7 +821,11 @@ def scrape_company_names(
             sectors=sectors,
         )
 
-        rows, total_records, total_pages = extract_company_rows(
+        (
+            rows,
+            total_records,
+            total_pages,
+        ) = extract_company_rows(
             response_json
         )
 
@@ -688,41 +836,87 @@ def scrape_company_names(
             expected_pages = total_pages
 
         if not rows:
-            if expected_total in (0, None):
-                print(f"Page {page}: 0 rows.")
+
+            if expected_total in (
+                0,
+                None,
+            ):
+
+                print(
+                    f"Page {page}: 0 rows."
+                )
+
                 break
 
             raise RuntimeError(
-                f"ScanX returned 0 rows on page {page} even though "
+                f"ScanX returned 0 rows on page "
+                f"{page} even though "
                 f"total_records={expected_total}."
             )
 
         new_companies = 0
 
         for row in rows:
-            record = extract_company_record(row)
+
+            record = extract_company_record(
+                row
+            )
 
             if record is None:
                 continue
 
-            company_name = record["company_name"]
-            existing_index = record_index.get(company_name)
+            company_name = record[
+                "company_name"
+            ]
+
+            existing_index = (
+                record_index.get(
+                    company_name
+                )
+            )
 
             if existing_index is None:
-                record_index[company_name] = len(records)
-                records.append(record)
+
+                record_index[
+                    company_name
+                ] = len(records)
+
+                records.append(
+                    record
+                )
+
                 new_companies += 1
+
                 continue
 
-            # Preserve the first value, but fill blanks from a later
-            # occurrence if ScanX returns incomplete metadata.
-            existing = records[existing_index]
+            # Preserve the first value.
+            # Fill blanks from later occurrences.
 
-            if not existing["industry"] and record["industry"]:
-                existing["industry"] = record["industry"]
+            existing = records[
+                existing_index
+            ]
 
-            if not existing["sector"] and record["sector"]:
-                existing["sector"] = record["sector"]
+            if (
+                not existing["industry"]
+                and record["industry"]
+            ):
+
+                existing[
+                    "industry"
+                ] = record[
+                    "industry"
+                ]
+
+            if (
+                not existing["sector"]
+                and record["sector"]
+            ):
+
+                existing[
+                    "sector"
+                ] = record[
+                    "sector"
+                ]
 
         page_text = (
             f"{page}/{expected_pages}"
@@ -737,25 +931,45 @@ def scrape_company_names(
         )
 
         print(
-            f"Page {page_text}: API rows={len(rows)} | "
+            f"Page {page_text}: "
+            f"API rows={len(rows)} | "
             f"new companies={new_companies} | "
-            f"distinct collected={len(records)}/{total_text}"
+            f"distinct collected="
+            f"{len(records)}/{total_text}"
         )
 
-        if expected_pages is not None and page >= expected_pages:
+        if (
+            expected_pages is not None
+            and page >= expected_pages
+        ):
             break
 
-        if expected_pages is None and len(rows) < PAGE_SIZE:
+        if (
+            expected_pages is None
+            and len(rows) < PAGE_SIZE
+        ):
             break
 
         page += 1
-        time.sleep(REQUEST_DELAY)
 
-    if expected_total is not None and len(records) != expected_total:
+        time.sleep(
+            REQUEST_DELAY
+        )
+
+    # ========================================================
+    # FINAL PAGINATION VALIDATION
+    # ========================================================
+
+    if (
+        expected_total is not None
+        and len(records) != expected_total
+    ):
+
         raise RuntimeError(
             "ScanX pagination validation failed: "
             f"expected {expected_total} records, "
-            f"collected {len(records)} distinct companies."
+            f"collected {len(records)} "
+            "distinct companies."
         )
 
     return records
@@ -770,21 +984,40 @@ def save_company_names(
     file_path: Path = OUTPUT_FILE,
 ) -> Path:
     """
-    Save the ScanX universe with taxonomy columns.
+    Save the ScanX universe.
 
     Output columns:
+
         company_name
         industry
         sector
+
+    IMPORTANT:
+        The file is completely written and closed
+        before upload_file() is called.
     """
 
-    file_path.parent.mkdir(parents=True, exist_ok=True)
+    if not records:
+        raise ValueError(
+            "Cannot save ScanX output because "
+            "records is empty."
+        )
+
+    file_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    # --------------------------------------------------------
+    # WRITE COMPLETE FILE
+    # --------------------------------------------------------
 
     with file_path.open(
         "w",
         newline="",
         encoding="utf-8-sig",
     ) as file:
+
         writer = csv.DictWriter(
             file,
             fieldnames=[
@@ -797,18 +1030,61 @@ def save_company_names(
         writer.writeheader()
 
         for record in records:
+
             writer.writerow(
                 {
-                    "company_name": record.get("company_name", ""),
-                    "industry": record.get("industry", ""),
-                    "sector": record.get("sector", ""),
+                    "company_name": record.get(
+                        "company_name",
+                        "",
+                    ),
+                    "industry": record.get(
+                        "industry",
+                        "",
+                    ),
+                    "sector": record.get(
+                        "sector",
+                        "",
+                    ),
                 }
             )
-            
-            upload_file(file_path)
 
-    print(f"Saved: {file_path.resolve()}")
-    print(f"Rows written: {len(records)}")
+    # --------------------------------------------------------
+    # FILE IS NOW CLOSED
+    # Upload only after the complete CSV exists.
+    # --------------------------------------------------------
+
+    if not file_path.exists():
+        raise RuntimeError(
+            f"CSV was not created: {file_path}"
+        )
+
+    if file_path.stat().st_size == 0:
+        raise RuntimeError(
+            f"CSV was created but is empty: "
+            f"{file_path}"
+        )
+
+    print(
+        f"Saved locally: "
+        f"{file_path.resolve()}"
+    )
+
+    print(
+        f"Rows written: "
+        f"{len(records)}"
+    )
+
+    print(
+        "Uploading completed CSV..."
+    )
+
+    upload_file(
+        file_path
+    )
+
+    print(
+        "Upload completed."
+    )
 
     return file_path
 
@@ -821,25 +1097,60 @@ def run_scan(
     industries: list[str],
     sectors: list[str],
 ) -> list[str]:
-    """Run one ScanX scrape using the dashboard's selections."""
+    """Run one ScanX scrape."""
 
-    print("========================================")
-    print("SCANX SCRAPER")
-    print("========================================")
-    print(f"Industries selected: {len(industries)}")
-    print(f"Sectors selected:    {len(sectors)}")
-    print(f"Page size:           {PAGE_SIZE}")
+    print(
+        "========================================"
+    )
+
+    print(
+        "SCANX SCRAPER"
+    )
+
+    print(
+        "========================================"
+    )
+
+    print(
+        f"Industries selected: "
+        f"{len(industries)}"
+    )
+
+    print(
+        f"Sectors selected:    "
+        f"{len(sectors)}"
+    )
+
+    print(
+        f"Page size:           "
+        f"{PAGE_SIZE}"
+    )
+
     print()
 
     session = create_session()
 
     try:
+
+        # ----------------------------------------------------
+        # Load ScanX entry page
+        # ----------------------------------------------------
+
         entry_response = session.get(
             ENTRY_URL,
             timeout=REQUEST_TIMEOUT,
         )
+
         entry_response.raise_for_status()
-        print(f"Entry page: HTTP {entry_response.status_code}")
+
+        print(
+            f"Entry page: HTTP "
+            f"{entry_response.status_code}"
+        )
+
+        # ----------------------------------------------------
+        # Scrape all pages
+        # ----------------------------------------------------
 
         records = scrape_company_names(
             session=session,
@@ -848,23 +1159,48 @@ def run_scan(
         )
 
         if not records:
-            raise RuntimeError("ScanX returned no company names.")
 
-        save_company_names(records)
+            raise RuntimeError(
+                "ScanX returned no company names."
+            )
+
+        # ----------------------------------------------------
+        # Save + upload complete dataset
+        # ----------------------------------------------------
+
+        save_company_names(
+            records
+        )
 
         names = [
-            record["company_name"]
+            record[
+                "company_name"
+            ]
             for record in records
         ]
 
-        print("\n========================================")
-        print("SCANX SCRAPER COMPLETE")
-        print("========================================")
-        print(f"Distinct company names: {len(names)}")
+        print()
+        print(
+            "========================================"
+        )
+
+        print(
+            "SCANX SCRAPER COMPLETE"
+        )
+
+        print(
+            "========================================"
+        )
+
+        print(
+            f"Distinct company names: "
+            f"{len(names)}"
+        )
 
         return names
 
     finally:
+
         session.close()
 
 
@@ -873,6 +1209,8 @@ def run_scan(
 # ============================================================
 
 if __name__ == "__main__":
+
     raise RuntimeError(
-        "Run ScanX from dashboard.py so industries and sectors can be selected."
+        "Run ScanX from dashboard.py so "
+        "industries and sectors can be selected."
     )
