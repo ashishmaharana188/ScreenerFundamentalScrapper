@@ -598,7 +598,7 @@ _metric_grid(
 # STEP 1: SCANX
 # ============================================================
 _section_header(
-    "Build ScanX universe",
+    "Build ScanX Sector/Industry",
     "Select one or more industries. Sector is optional and can be left empty.",
     (
         f"{scanx_count:,} companies loaded"
