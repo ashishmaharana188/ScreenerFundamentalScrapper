@@ -603,7 +603,7 @@ _section_header(
     (
         f"{scanx_count:,} companies loaded"
         if scanx_count
-        else "No universe loaded"
+        else "Nothing loaded"
     ),
 )
 
