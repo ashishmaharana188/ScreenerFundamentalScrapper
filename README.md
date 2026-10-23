@@ -1,4 +1,4 @@
-https://screenerfundamentalscrapper.onrender.com
+
 
 # Fundamental Scanner Guide
 
